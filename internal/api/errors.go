@@ -38,13 +38,22 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err == nil {
 		return true
 	}
+	writeBodyReadError(w, err)
+	return false
+}
+
+// writeBodyReadError answers a failure to read or decode a request body:
+// 413 when the body ran past the cap installed by MaxRequestBody or
+// WithMaxBody (http.MaxBytesReader reports *http.MaxBytesError), otherwise a
+// 400 with a fixed message. Handlers that buffer the body themselves
+// (io.ReadAll) use this directly; everything else goes through decodeJSON.
+func writeBodyReadError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
-		return false
+		return
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-	return false
 }
 
 // upstreamDetail reduces text that came from another service (a download
