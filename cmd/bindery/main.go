@@ -955,17 +955,7 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			cacheBytes, _ := imageProxyHandler.CacheSize()
 			hardcoverState := api.HardcoverFeatureStateFor(r.Context(), settingsRepo, cfg.EnhancedHardcoverAPI)
-			var pausedUntil string
-			var tokenRejected bool
-			var exhausted *metadata.DailyQuotaError
-			var rejected *metadata.TokenRejectedError
-			if err := hcClient.CheckQuota(r.Context()); errors.As(err, &rejected) {
-				tokenRejected = true
-			} else if errors.As(err, &exhausted) {
-				pausedUntil = exhausted.ResetAt.UTC().Format(time.RFC3339)
-			} else if err != nil {
-				slog.Warn("read Hardcover pause status", "error", err)
-			}
+			pausedUntil, tokenRejected := hardcoverHoldStatus(hcClient.CheckQuota(r.Context()))
 			_ = json.NewEncoder(w).Encode(struct {
 				Version   string `json:"version"`
 				Commit    string `json:"commit"`

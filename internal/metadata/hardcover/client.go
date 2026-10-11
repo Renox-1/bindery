@@ -1103,6 +1103,14 @@ func tokenRejectionError(status int, raw []byte) error {
 	if !isTokenRejection(status, envelope, parsed) {
 		return nil
 	}
+	if status == http.StatusUnauthorized && !parsed && len(bytes.TrimSpace(raw)) > 0 {
+		// Hardcover answers a bad token with a JSON body (invalid_token). A 401
+		// carrying an HTML or plain text page came from something in front of
+		// it, a proxy or a CDN, which says nothing about the token. Pausing on
+		// it would lock a valid token out for an hour, so it stays an ordinary
+		// failed call.
+		return nil
+	}
 	if status == http.StatusForbidden {
 		switch strings.ToLower(strings.TrimSpace(envelope.Error)) {
 		case "invalid_request", "access_denied", "insufficient_scope":

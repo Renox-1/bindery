@@ -100,6 +100,10 @@ func TestRejectedTokenOnlyForAuthenticationFailures(t *testing.T) {
 		hold   bool
 	}{
 		{"401", 401, ``, true},
+		{"401 JSON invalid_token", 401, rejectedBody, true},
+		{"401 proxy html page", 401, `<html><body>401 Authorization Required</body></html>`, false},
+		{"401 plain text from a gateway", 401, `Unauthorized`, false},
+		{"403 cloudflare challenge page", 403, `<!DOCTYPE html><title>Just a moment...</title>`, false},
 		{"403 invalid_token", 403, rejectedBody, true},
 		{"403 unable to verify", 403, `{"error":"Unable to verify token"}`, true},
 		{"403 refused operator", 403, `{"error":"ilike and related operations are not permitted on this server."}`, false},

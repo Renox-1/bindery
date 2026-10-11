@@ -748,7 +748,8 @@ Different tokens have separate holds, even if they belong to the same account.
 
 ### Hardcover rejected token pause
 
-When Hardcover answers a request with 401, or with a 403 whose body is an
+When Hardcover answers a request with a JSON 401 (a 401 page that is HTML or plain
+text came from a proxy or CDN and does not count), or with a 403 whose body is an
 authentication failure (`invalid_token`, `unauthorized`, `invalid_grant` or
 "Unable to verify token"), Bindery stops sending requests with that token. A
 bulk import, a discovery sweep, a catalogue sync, a list sync and the scheduled
