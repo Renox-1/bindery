@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -310,7 +312,7 @@ func TestErrorLeak_RootFolderCreateMissingPath(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"path": missing})
 	rec := httptest.NewRecorder()
 	h.Create(rec, httptest.NewRequest(http.MethodPost, "/rootfolder", bytes.NewReader(body)))
-	wantFixed(t, rec, http.StatusBadRequest, "path does not exist or is not accessible")
+	wantFixed(t, rec, http.StatusBadRequest, rootFolderStatMessage(fs.ErrNotExist))
 	if strings.Contains(rec.Body.String(), "etc-shadow-x") {
 		t.Errorf("body echoes the submitted path: %s", rec.Body.String())
 	}
@@ -561,10 +563,11 @@ func TestDownloadClientTestConfig_ConnectionFailureIs502(t *testing.T) {
 	// The operator still gets Bindery's own hint for the failure, but the
 	// error text, which embeds the request URL, stays in the log.
 	msg := errorField(t, rec)
-	if !strings.HasPrefix(msg, "could not reach the download client") || !strings.Contains(msg, "connection refused") {
-		t.Errorf("error = %q, want the connection refused hint", msg)
+	want := "could not reach SABnzbd at " + net.JoinHostPort(host, strconv.Itoa(port)) + " (connection refused"
+	if !strings.HasPrefix(msg, want) {
+		t.Errorf("error = %q, want it to start with %q (client, host:port, refused hint)", msg, want)
 	}
-	if strings.Contains(msg, "http://") || strings.Contains(msg, strconv.Itoa(port)) {
+	if strings.Contains(msg, "http://") || strings.Contains(msg, "apikey") {
 		t.Errorf("error = %q echoes the request URL", msg)
 	}
 }
@@ -657,7 +660,8 @@ func TestUpstreamDetail(t *testing.T) {
 		{"redacted", "GET https://h/x?apikey=" + leakSecret + " failed", func(s string) bool { return !strings.Contains(s, leakSecret) }},
 		{"capped", long, func(s string) bool { return len(s) == upstreamDetailMax }},
 		{"rune boundary", multibyte, func(s string) bool { return len(s) <= upstreamDetailMax && strings.ToValidUTF8(s, "") == s }},
-		{"empty", "", func(s string) bool { return s == "" }},
+		{"empty", "", func(s string) bool { return s == upstreamDetailEmpty }},
+		{"leading blank line", "\r\n\r\nreal reason\nmore", func(s string) bool { return s == "real reason" }},
 	}
 	for _, c := range cases {
 		if got := upstreamDetail(c.in); !c.check(got) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -97,17 +98,37 @@ func MethodNotAllowedJSON(routes chi.Routes) http.HandlerFunc {
 	}
 }
 
+// Free text credentials. httpsec.RedactSecrets only knows URL shaped secrets
+// (?apikey=..., user:pass@host), but a service's own error line can quote a
+// header or a form field: "Authorization: Bearer x", "apikey=x", {"token":"x"}.
+var (
+	// A credential header: the rest of the line goes.
+	secretHeaderRE = regexp.MustCompile(`(?i)\b(authorization|proxy-authorization|x-api-key|set-cookie|cookie)\s*:[^\r\n]*`)
+	// A credential field written name=value or "name":"value". A bare
+	// "name: word" is left alone, since prose such as "token: expired" is the
+	// useful part of a message.
+	secretFieldRE = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|token|password|passwd|secret)\b((?:["']\s*:\s*["']?)|(?:\s*=\s*["']?))[^\s"',;&<>]+`)
+)
+
+// redactFreeText removes credentials that RedactSecrets cannot see because
+// they are not part of a URL.
+func redactFreeText(s string) string {
+	s = secretHeaderRE.ReplaceAllString(s, "${1}: REDACTED")
+	return secretFieldRE.ReplaceAllString(s, "${1}${2}REDACTED")
+}
+
 // upstreamDetail reduces text that came from another service (a download
 // client, Prowlarr) to something safe to show: credentials redacted, the first
 // line only, at most upstreamDetailMax bytes. Upstream bodies can be HTML
 // error pages or stack traces, and a first line is enough for an operator to
 // see what the service objected to.
 func upstreamDetail(msg string) string {
-	msg = httpsec.RedactSecrets(msg)
+	// Trim first, so a body that opens with a blank line still yields its
+	// first line of text rather than nothing.
+	msg = strings.TrimSpace(redactFreeText(httpsec.RedactSecrets(msg)))
 	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
-		msg = msg[:i]
+		msg = strings.TrimSpace(msg[:i])
 	}
-	msg = strings.TrimSpace(msg)
 	if len(msg) > upstreamDetailMax {
 		// Cut on a rune boundary so a multi-byte character is never split.
 		cut := upstreamDetailMax
@@ -116,8 +137,15 @@ func upstreamDetail(msg string) string {
 		}
 		msg = msg[:cut]
 	}
+	if msg == "" {
+		return upstreamDetailEmpty
+	}
 	return msg
 }
+
+// upstreamDetailEmpty is what a caller sees when the other service sent no
+// text at all, so the UI never renders a blank reason.
+const upstreamDetailEmpty = "the service returned an error with no message"
 
 // writeUpstreamDetail is for connection-test style endpoints, where the
 // operator needs some of what the other service said. err is logged in full;

@@ -18,6 +18,7 @@ import (
 	"github.com/vavallee/bindery/internal/concurrency"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/downloader"
+	"github.com/vavallee/bindery/internal/downloader/nethint"
 	"github.com/vavallee/bindery/internal/indexer"
 	"github.com/vavallee/bindery/internal/indexer/newznab"
 	"github.com/vavallee/bindery/internal/models"
@@ -69,6 +70,14 @@ type sendError struct{ cause error }
 func (e *sendError) Error() string   { return errSendFailed.Error() + ": " + e.cause.Error() }
 func (e *sendError) Unwrap() []error { return []error{errSendFailed, e.cause} }
 
+// sendFailedText is sendFailedMessage plus Bindery's own hint when the cause is
+// a network failure (refused, timed out, unknown container name). The hint is
+// fixed text chosen by the class of failure, so it names no host and no URL,
+// and it is what tells a user the client is down, not that the release is bad.
+func sendFailedText(err error) string {
+	return sendFailedMessage + nethint.ForErr(err)
+}
+
 // writeGrabError answers an error from grab or resendRelease. A missing client
 // is a setup problem the user can fix (400, with a code the web app keys on);
 // a refused or unreachable client is a generic 502, since the text comes from
@@ -79,7 +88,7 @@ func writeGrabError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": codeNoDownloadClient})
 	case errors.Is(err, errSendFailed):
 		slog.Warn("grab: download client did not take the release", "method", r.Method, "path", r.URL.Path, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": sendFailedMessage})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": sendFailedText(err)})
 	default:
 		writeServerError(w, r, err)
 	}
@@ -101,7 +110,7 @@ func queueItemMessage(err error) string {
 		return err.Error()
 	case errors.Is(err, errSendFailed):
 		slog.Warn("bulk queue item: download client did not take the release", "error", err)
-		return sendFailedMessage
+		return sendFailedText(err)
 	default:
 		slog.Error("bulk queue item failed", "error", err)
 		return "internal server error"

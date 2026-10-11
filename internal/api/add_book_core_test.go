@@ -434,7 +434,7 @@ func TestWriteCreateAuthorError_Statuses(t *testing.T) {
 		{"invalid monitor option", &createAuthorOptionError{Err: errors.New("monitorMode must be one of: all, future, latest, none")}, http.StatusBadRequest,
 			errorBody("monitorMode must be one of: all, future, latest, none")},
 		{"upstream lookup failed", &createAuthorLookupError{Err: errors.New("openlibrary: upstream 502")}, http.StatusBadGateway,
-			errorBody("openlibrary: upstream 502")},
+			errorBody("metadata provider unavailable")},
 		{"conflict with canonical author", &authorConflictError{Canonical: canonical, Message: "author already exists"}, http.StatusConflict, map[string]any{
 			"error":             "author already exists",
 			"canonicalAuthorId": canonical.ID,
