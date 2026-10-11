@@ -110,6 +110,67 @@ API) and <https://authority.bibsys.no> (the Norwegian authority file). Reviewed
   A self-hosted install that shows the names to its own users does not
   redistribute them.
 
+## Bibliothèque nationale de France
+
+Sources: the BnF catalogue's general terms of use, sections 2 and 4
+(<https://catalogue.bnf.fr/conditions.do>), the Licence Ouverte / Open Licence
+2.0 text (<https://github.com/etalab/licence-ouverte/blob/master/LO.md>), and
+the SRU service description (<https://catalogue.bnf.fr/api/SRU?version=1.2&operation=explain>).
+Reviewed 2026-10-11. Only contacted when BnF is the primary provider: an
+install that does not choose it sends BnF no request at all, not even at
+startup.
+
+- **The catalogue records are under the Licence Ouverte 2.0 (Etalab).** It
+  allows reuse, including commercial reuse, modification and redistribution,
+  with no copyleft, and is compatible with CC BY. Its condition is credit:
+  name the source (at least "Bibliothèque nationale de France") and the date
+  the data was last updated. Bindery shows this credit in Settings, Metadata
+  Profiles, where BnF is chosen as the primary provider:
+
+  > Contains data from the Bibliothèque nationale de France under the Licence
+  > Ouverte / Open Licence 2.0, retrieved <date>.
+
+  The date is when Bindery fetched the record. Each book and author keeps it:
+  `created_at` when it was added, and `last_metadata_refresh_at` when it was
+  last refreshed from its provider. A book's ID is the record's ARK
+  (`bnf:cb48780493c` is <https://catalogue.bnf.fr/ark:/12148/cb48780493c>), so
+  the source record of every BnF book can be found, and the Links menu opens
+  it. A self-hosted install that shows the data to its own users does not
+  redistribute it. Anyone who publishes the data, for example as a dataset or
+  on a public site, should keep the credit line with the retrieval date.
+- **No endorsement, nothing misattributed.** The licence forbids suggesting
+  that BnF endorses the reuse, and BnF does not endorse Bindery. Values Bindery
+  derives itself (how editions are grouped into works, which edition names the
+  work, ratings or series from other providers) are Bindery's, not BnF's.
+- **Only book records are used.** The terms carve out the third party records
+  for music audio recordings, and the Dewey classification authority records,
+  from the open licence. Bindery searches only bibliographic records of
+  document type "printed text" (`bib.doctype any "a"`), drops any record whose
+  own type says it is a sound recording, music, an image or a map, and asks the
+  authority file only for persons (`aut.type any "pep"`). It never queries the
+  Dewey or subject authorities and does not read subject or classification
+  fields.
+- **Covers are excluded.** Bindery fetches no image from BnF, data.bnf.fr or
+  Gallica, and ignores the cover links some records carry: Gallica has its own
+  terms, images reused on Wikimedia Commons carry each image's own licence, and
+  no terms were found for BnF's cover image service. BnF books get covers only
+  from the other providers.
+- **Summaries are not claimed as open data.** A record's summary is often the
+  publisher's text, or a commercial database's (Electre), not BnF's
+  cataloguing, so the open licence may not reach it. Bindery stores a summary
+  only as the book description, the way it does for the other providers, and
+  only when the record gives no source or names the publisher; a summary
+  attributed to any other third party is skipped.
+- **Names are personal data.** Authors and translators are people, and their
+  names and dates come from BnF's authority file. BnF gives the people named
+  in its catalogue and data.bnf.fr rights of access and correction, exercised
+  with BnF. Bindery stores the names in the install's own database, like every
+  other provider's, and sends them nowhere.
+- **No published rate limit.** BnF publishes none, so Bindery paces itself: at
+  most one request a second and two in flight for the whole process, a
+  `Retry-After` is honoured, and a refusal holds every BnF request. See
+  `internal/metadata/bnf/pacer.go`.
+
 ## Audible
 
 `internal/metadata/audible` calls an unpublished Amazon endpoint, and Amazon's
