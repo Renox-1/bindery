@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -120,6 +121,12 @@ func VerifyPasswordContext(ctx context.Context, password, phc string) (bool, err
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
 		return false, nil
 	}
+	if !argonParamsAcceptable(memory, time, threads) {
+		// A stored hash outside the range is refused before a KDF slot is taken
+		// or any memory is allocated; the user cannot log in with it, so say why.
+		slog.Warn("password hash refused: argon2 parameters outside the supported range", "m", memory, "t", time, "p", threads)
+		return false, nil
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
 		return false, nil
@@ -200,3 +207,25 @@ func RandomBase64URL(n int) (string, error) {
 
 // ErrInvalidCredentials is returned by Login when username or password is wrong.
 var ErrInvalidCredentials = errors.New("invalid credentials")
+
+// Upper bounds on the argon2 parameters read back out of a stored hash. Bindery
+// writes m=65536 (64 MiB), t=1, p=4, so these leave room for hashes made with
+// other common profiles (OWASP lists m=19456,t=2,p=1 up to m=47104,t=1,p=1) and
+// for a later increase of the defaults, while a hash that asks for gigabytes,
+// thousands of iterations or a wild thread count is refused rather than run.
+// Memory is held for the whole KDF, and kdfSlots only bounds how many run at
+// once, so an unbounded m would defeat that bound.
+const (
+	argonMaxMemory  uint32 = 256 * 1024 // KiB, 256 MiB
+	argonMaxTime    uint32 = 10
+	argonMaxThreads uint8  = 8
+)
+
+// argonParamsAcceptable reports whether m, t and p read from a stored hash are
+// inside the range Bindery will run. The lower bounds matter too: argon2.IDKey
+// panics on t=0 or p=0.
+func argonParamsAcceptable(memory, time uint32, threads uint8) bool {
+	return memory >= 1 && memory <= argonMaxMemory &&
+		time >= 1 && time <= argonMaxTime &&
+		threads >= 1 && threads <= argonMaxThreads
+}
