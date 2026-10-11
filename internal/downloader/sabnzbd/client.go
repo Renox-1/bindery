@@ -42,7 +42,14 @@ func New(host string, port int, apiKey, urlBase string, useSSL bool) *Client {
 	c := &Client{
 		baseURL: fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: 15 * time.Second},
+		// Control client: dialled directly (never via BINDERY_OUTBOUND_PROXY),
+		// with the dial and every redirect hop checked so a redirect or a
+		// rebound hostname cannot reach a link-local or metadata address.
+		http: &http.Client{
+			Timeout:       15 * time.Second,
+			Transport:     httpsec.DirectGuardedTransport(httpsec.PolicyLANLoopback),
+			CheckRedirect: httpsec.RedirectGuard(httpsec.PolicyLANLoopback),
+		},
 		validateNZBURL: func(raw string) error {
 			return httpsec.ValidateOutboundURL(raw, httpsec.DownloadFetchPolicy())
 		},

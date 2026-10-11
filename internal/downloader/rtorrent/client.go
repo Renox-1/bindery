@@ -116,9 +116,13 @@ func New(host string, port int, username, password, urlBase string, useSSL bool)
 	}
 
 	c := &Client{
-		username:       username,
-		password:       password,
-		http:           &http.Client{Timeout: rpcTimeout},
+		username: username,
+		password: password,
+		// Control client: dialled directly (never via BINDERY_OUTBOUND_PROXY)
+		// with the dial checked so a rebound hostname cannot reach a
+		// link-local or metadata address. Redirects are pinned to the RPC
+		// target by checkRedirect below.
+		http:           &http.Client{Timeout: rpcTimeout, Transport: httpsec.DirectGuardedTransport(httpsec.PolicyLANLoopback)},
 		fetchTransport: httpsec.GuardedTransport(httpsec.DownloadFetchPolicy()),
 		pollInterval:   addPollInterval,
 	}

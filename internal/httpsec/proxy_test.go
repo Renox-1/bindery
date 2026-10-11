@@ -403,3 +403,114 @@ func TestIsProxyAddr(t *testing.T) {
 		}
 	}
 }
+
+func directFetch(t *testing.T, target string, timeout time.Duration) (*http.Response, error) {
+	t.Helper()
+	client := &http.Client{
+		Transport:     DirectGuardedTransport(PolicyLANLoopback),
+		CheckRedirect: RedirectGuard(PolicyLANLoopback),
+		Timeout:       timeout,
+	}
+	return client.Get(target)
+}
+
+// Download clients on loopback (127.0.0.1, localhost) and on the LAN are the
+// normal case and must keep working under the control-client policy.
+func TestDirectGuardedTransport_LoopbackAndLocalhostAllowed(t *testing.T) {
+	srv, hits := countingServer(t)
+	u := strings.TrimPrefix(srv.URL, "http://")
+	_, port, _ := strings.Cut(u, ":")
+	for _, target := range []string{srv.URL, "http://localhost:" + port} {
+		resp, err := directFetch(t, target, 3*time.Second)
+		if err != nil {
+			t.Fatalf("GET %s: %v", target, err)
+		}
+		_ = resp.Body.Close()
+	}
+	if atomic.LoadInt32(hits) != 2 {
+		t.Errorf("hits = %d; want 2", atomic.LoadInt32(hits))
+	}
+}
+
+// RFC1918 and docker-bridge addresses are not refused by the policy: the dial
+// proceeds and fails (or times out) on the network, not with a policy error.
+func TestDirectGuardedTransport_PrivateLANNotPolicyRefused(t *testing.T) {
+	for _, target := range []string{"http://192.168.250.250:9/", "http://172.30.250.250:9/", "http://10.250.250.250:9/"} {
+		resp, err := directFetch(t, target, 300*time.Millisecond)
+		if err == nil {
+			_ = resp.Body.Close()
+			continue
+		}
+		if strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("GET %s refused by policy: %v", target, err)
+		}
+	}
+}
+
+// The control clients are intentionally left off BINDERY_OUTBOUND_PROXY.
+func TestDirectGuardedTransport_IgnoresOutboundProxy(t *testing.T) {
+	resetProxy(t)
+	proxySrv, proxyHits := countingServer(t)
+	if _, err := ConfigureOutboundProxy(proxySrv.URL, "", false); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	target, targetHits := countingServer(t)
+	resp, err := directFetch(t, target.URL, 3*time.Second)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if atomic.LoadInt32(proxyHits) != 0 || atomic.LoadInt32(targetHits) != 1 {
+		t.Errorf("proxy hits %d, target hits %d; want 0 and 1", *proxyHits, *targetHits)
+	}
+}
+
+func TestDirectGuardedTransport_SharedPerPolicy(t *testing.T) {
+	if DirectGuardedTransport(PolicyLANLoopback) != DirectGuardedTransport(PolicyLANLoopback) {
+		t.Error("one transport (one connection pool) per policy expected")
+	}
+	if DirectGuardedTransport(PolicyLANLoopback) == DirectGuardedTransport(PolicyStrict) {
+		t.Error("different policies must not share a transport")
+	}
+}
+
+func TestRedirectGuard(t *testing.T) {
+	var metadata, loopbackHop int32
+	final, finalHits := countingServer(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/to-metadata":
+			atomic.AddInt32(&metadata, 1)
+			http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+		case "/to-loopback":
+			atomic.AddInt32(&loopbackHop, 1)
+			http.Redirect(w, r, final.URL, http.StatusFound)
+		default: // endless loop
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	if resp, err := directFetch(t, srv.URL+"/to-metadata", 3*time.Second); err == nil {
+		_ = resp.Body.Close()
+		t.Error("redirect to the metadata address was followed")
+	} else if !strings.Contains(err.Error(), "redirect blocked") || !strings.Contains(err.Error(), "link-local") {
+		t.Errorf("error = %v; want redirect blocked with the link-local refusal", err)
+	}
+
+	resp, err := directFetch(t, srv.URL+"/to-loopback", 3*time.Second)
+	if err != nil {
+		t.Fatalf("redirect to a loopback target must be followed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if atomic.LoadInt32(finalHits) != 1 {
+		t.Errorf("final hits = %d; want 1", atomic.LoadInt32(finalHits))
+	}
+
+	if resp, err := directFetch(t, srv.URL+"/loop", 3*time.Second); err == nil {
+		_ = resp.Body.Close()
+		t.Error("endless redirect loop was not stopped")
+	} else if !strings.Contains(err.Error(), "10 redirects") {
+		t.Errorf("error = %v; want the redirect cap", err)
+	}
+}

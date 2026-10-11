@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -257,4 +258,52 @@ func parseNoProxy(raw string) []string {
 		}
 	}
 	return rules
+}
+
+var (
+	directGuardedMu sync.Mutex
+	directGuarded   = map[Policy]*http.Transport{}
+)
+
+// DirectGuardedTransport returns the RoundTripper for admin-configured
+// infrastructure that is always dialled directly: download clients and the
+// Audiobookshelf client. It is a clone of http.DefaultTransport (so the
+// standard HTTP_PROXY / NO_PROXY environment still applies, and
+// BINDERY_OUTBOUND_PROXY does not: those endpoints are intentionally left
+// direct) with a per-dial policy check, so a redirect hop or a hostname that
+// resolves to a forbidden address is refused at connect time.
+//
+// One transport is shared per policy so every client keeps one connection pool,
+// as http.DefaultTransport gave them before.
+func DirectGuardedTransport(policy Policy) http.RoundTripper {
+	directGuardedMu.Lock()
+	defer directGuardedMu.Unlock()
+	if t, ok := directGuarded[policy]; ok {
+		return t
+	}
+	var t *http.Transport
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		t = dt.Clone()
+	} else {
+		t = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	t.DialContext = NewDialContext(policy)
+	directGuarded[policy] = t
+	return t
+}
+
+// RedirectGuard returns an http.Client.CheckRedirect that stops after 10 hops
+// (net/http's own limit) and re-validates each hop's URL against policy, so a
+// redirect off a control endpoint cannot be used to reach a link-local or
+// cloud-metadata address. The error names the policy refusal.
+func RedirectGuard(policy Policy) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if err := ValidateOutboundURL(req.URL.String(), policy); err != nil {
+			return fmt.Errorf("redirect blocked: %w", err)
+		}
+		return nil
+	}
 }

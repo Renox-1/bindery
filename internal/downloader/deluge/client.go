@@ -75,9 +75,18 @@ func New(host string, port int, password, urlBase string, useSSL bool) *Client {
 	}
 	jar, _ := cookiejar.New(nil)
 	return &Client{
-		baseURL:        fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
-		password:       password,
-		http:           &http.Client{Timeout: 15 * time.Second, Jar: jar},
+		baseURL:  fmt.Sprintf("%s://%s%s", scheme, clienthost.Authority(host, port), urlbase.Normalize(urlBase)),
+		password: password,
+		// Control client: dialled directly (never via BINDERY_OUTBOUND_PROXY),
+		// with the dial and every redirect hop checked so a redirect or a
+		// rebound hostname cannot reach a link-local or metadata address. The
+		// cookie jar keeps the web UI session.
+		http: &http.Client{
+			Timeout:       15 * time.Second,
+			Jar:           jar,
+			Transport:     httpsec.DirectGuardedTransport(httpsec.PolicyLANLoopback),
+			CheckRedirect: httpsec.RedirectGuard(httpsec.PolicyLANLoopback),
+		},
 		fetchTransport: httpsec.GuardedTransport(httpsec.DownloadFetchPolicy()),
 	}
 }
