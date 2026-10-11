@@ -12,6 +12,16 @@ func TestSplitFilingForm(t *testing.T) {
 		{"hobbit, the", "hobbit", "the", true},
 		{"  Prozess, Der  ", "Prozess", "Der", true},
 		{"Hobbit, The.", "Hobbit", "The", true},
+		// Punctuation and diacritics around the article do not hide it: Review
+		// duplicates always read the tail through the title fold (#1691), and
+		// the shared rule must not narrow that.
+		{"Hobbit, The!", "Hobbit", "The", true},
+		{"Hobbit, The)", "Hobbit", "The", true},
+		{"Hobbit, \"The\"", "Hobbit", "The", true},
+		{"Hobbit, A\u2026", "Hobbit", "A", true},
+		{"Hobbit,\u00a0The", "Hobbit", "The", true},
+		{"Hobbit, \u00c9l", "Hobbit", "\u00c9l", true},
+		{"Hobbit, T.he", "Hobbit, T.he", "", false},
 		{"Rock, Paper, Scissors, A", "Rock, Paper, Scissors", "A", true},
 		{"Love, Actually", "Love, Actually", "", false},
 		{"Me, Myself and I", "Me, Myself and I", "", false},

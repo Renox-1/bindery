@@ -1,6 +1,9 @@
 package textutil
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // articles is the closed set of whole-word articles that title handling treats
 // as an article: dropped from the front by the Review duplicates article rule,
@@ -43,6 +46,12 @@ func IsArticle(word string) bool {
 // the accepted cost of recognising the form at all, and it is the same cost
 // Review duplicates already pays.
 //
+// The tail is read the way Review duplicates always read it, through the shared
+// title fold: surrounding punctuation ("The.", "The)", "The!") and diacritics
+// ("Él") do not hide the article, while a tail that folds to more than one word
+// ("Hello, A World") is not a lone article. The returned article is the tail as
+// written minus that surrounding punctuation.
+//
 // ok is false when title is not in filing form.
 func SplitFilingForm(title string) (base, article string, ok bool) {
 	t := strings.TrimSpace(title)
@@ -50,9 +59,14 @@ func SplitFilingForm(title string) (base, article string, ok bool) {
 	if idx < 0 {
 		return title, "", false
 	}
-	tail := strings.TrimRight(strings.TrimSpace(t[idx+1:]), ".")
 	head := strings.TrimSpace(t[:idx])
-	if head == "" || tail == "" || strings.ContainsAny(tail, " \t ") || !IsArticle(tail) {
+	tail := strings.TrimFunc(t[idx+1:], func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if head == "" || tail == "" {
+		return title, "", false
+	}
+	if words := strings.Fields(FoldForSlug(FoldForTitleMatch(tail))); len(words) != 1 || !IsArticle(words[0]) {
 		return title, "", false
 	}
 	return head, tail, true

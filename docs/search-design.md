@@ -200,9 +200,12 @@ used by both, so they cannot disagree. That change bumped
 `CanonicalDedupKeyRev` to 3. There is no SQL migration: SQLite cannot run the
 Go normalizer, `idx_books_author_dedup_key` is a plain index with no uniqueness
 constraint, and the startup backfill is the existing way to recompute a key.
-Rows that converge on one key stay separate rows. The importers see more than
-one match and route to review instead of binding, and Review duplicates reads
-titles, not this column, so the pair is listed there.
+Rows that converge on one key stay separate rows, and no new twin is created
+for that work. The Audiobookshelf importer sees more than one match and routes
+the item to review instead of binding. The Calibre importer, Add Book and the
+Hardcover list sync pick the first match, as they already do for any other pair
+that shares a key. Review duplicates reads titles, not this column, so the pair
+is listed there either way.
 
 ### Ranking: exact word beats prefix
 
