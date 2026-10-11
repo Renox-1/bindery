@@ -52,6 +52,7 @@ func TestClient_RedirectToMetadataRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "link-local") && !strings.Contains(err.Error(), "unexpected target") {
 		t.Errorf("error = %v; want the link-local refusal", err)
 	}
+
 }
 
 func TestClient_LinkLocalHostRefusedAtDial(t *testing.T) {

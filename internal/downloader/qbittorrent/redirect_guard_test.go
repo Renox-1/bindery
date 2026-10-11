@@ -52,6 +52,10 @@ func TestClient_RedirectToMetadataRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "link-local") {
 		t.Errorf("error = %v; want the link-local refusal", err)
 	}
+	// The redirect hop itself is refused (CheckRedirect), not just the later connect.
+	if !strings.Contains(err.Error(), "redirect blocked") {
+		t.Errorf("error = %v; want the redirect refused at the hop", err)
+	}
 }
 
 func TestClient_LinkLocalHostRefusedAtDial(t *testing.T) {
