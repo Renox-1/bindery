@@ -402,7 +402,7 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	limiterKey := "password-change:" + strconv.FormatInt(u.ID, 10)
 	if !h.limiter.Acquire(limiterKey) {
 		slog.Warn("password change: too many wrong current passwords, refusing", "user_id", u.ID)
-		writeErr(w, http.StatusTooManyRequests, "too many attempts — try again later")
+		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
 		return
 	}
 	ok, err := h.verifyPassword(ctx, req.CurrentPassword, u.PasswordHash)
