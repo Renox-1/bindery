@@ -961,3 +961,77 @@ func TestStatus_HostNotAllowedInLoginFreeModes(t *testing.T) {
 		}
 	}
 }
+
+// S5: ChangePassword verifies the current password, so it is a second oracle
+// for a stolen session cookie and must be throttled like Login. Six wrong
+// current passwords from one account give 429, a different account is not
+// affected, and the lockout holds even for the right password until it ages out.
+func TestChangePassword_WrongCurrentIsRateLimited(t *testing.T) {
+	h, users, _, ctx := newAuthFixture(t)
+	hashA, _ := auth.HashPassword("old-password-a")
+	first, err := users.Create(ctx, "first", hashA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashB, _ := auth.HashPassword("old-password-b")
+	second, err := users.Create(ctx, "second", hashB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	change := func(uid int64, current string) int {
+		req := httptest.NewRequest(http.MethodPost, "/auth/password",
+			jsonBody(t, changePasswordRequest{CurrentPassword: current, NewPassword: "new-password-2026"}))
+		req = req.WithContext(auth.WithUserID(req.Context(), uid))
+		rec := httptest.NewRecorder()
+		h.ChangePassword(rec, req)
+		return rec.Code
+	}
+
+	for i := 1; i <= 5; i++ {
+		if got := change(first.ID, "WRONG"); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i, got)
+		}
+	}
+	if got := change(first.ID, "WRONG"); got != http.StatusTooManyRequests {
+		t.Fatalf("attempt 6: status = %d, want 429", got)
+	}
+	if got := change(first.ID, "old-password-a"); got != http.StatusTooManyRequests {
+		t.Fatalf("right password while locked out: status = %d, want 429", got)
+	}
+	// Another account is unaffected.
+	if got := change(second.ID, "old-password-b"); got != http.StatusOK {
+		t.Fatalf("other account: status = %d, want 200", got)
+	}
+}
+
+// A successful change clears the failure count.
+func TestChangePassword_SuccessResetsLimiter(t *testing.T) {
+	h, users, _, ctx := newAuthFixture(t)
+	hash, _ := auth.HashPassword("old-password")
+	u, err := users.Create(ctx, "only", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := func(current, next string) int {
+		req := httptest.NewRequest(http.MethodPost, "/auth/password",
+			jsonBody(t, changePasswordRequest{CurrentPassword: current, NewPassword: next}))
+		req = req.WithContext(auth.WithUserID(req.Context(), u.ID))
+		rec := httptest.NewRecorder()
+		h.ChangePassword(rec, req)
+		return rec.Code
+	}
+	for i := 0; i < 4; i++ {
+		if got := change("WRONG", "new-password-2026"); got != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", got)
+		}
+	}
+	if got := change("old-password", "second-password-1"); got != http.StatusOK {
+		t.Fatalf("correct change: status = %d, want 200", got)
+	}
+	for i := 0; i < 4; i++ {
+		if got := change("WRONG", "x-password-12345"); got != http.StatusUnauthorized {
+			t.Fatalf("after reset, wrong attempt %d: status = %d, want 401", i+1, got)
+		}
+	}
+}
