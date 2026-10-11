@@ -127,7 +127,7 @@ describe('Primary metadata provider selector', () => {
     const credit = await screen.findByTestId('bnf-credit')
     expect(credit.textContent).toMatch(/Contains data from the Bibliothèque nationale de France/)
     expect(credit.textContent).toMatch(/Licence Ouverte \/ Open Licence 2\.0/)
-    expect(credit.textContent).toMatch(/retrieved when/)
+    expect(credit.textContent).toMatch(/date each record was retrieved/)
     expect(credit.textContent).toMatch(/does not endorse/)
   })
 })

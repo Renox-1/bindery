@@ -108,6 +108,24 @@ export function providerFromBookForeignId(foreignId: string | undefined | null):
   return 'openlibrary'
 }
 
+// When a record's provider data was retrieved, for the providers whose
+// licence asks for the date next to the credit: BnF's Licence Ouverte /
+// Open Licence 2.0 asks for the source and the date of the data (#3144).
+// Bindery keeps no fetch time per field, so this is the row's own: when its
+// metadata was last fetched (a rebind, or an author's metadata refresh),
+// else when it was added. Returns a calendar date (YYYY-MM-DD) or null.
+export function metadataRetrievedDate(
+  record: { lastMetadataRefreshAt?: string | null; createdAt?: string | null } | undefined | null,
+): string | null {
+  for (const value of [record?.lastMetadataRefreshAt, record?.createdAt]) {
+    if (!value) continue
+    const when = new Date(value)
+    // The zero time a Go time.Time marshals to is not a date.
+    if (!Number.isNaN(when.getTime()) && when.getUTCFullYear() > 1) return when.toISOString().slice(0, 10)
+  }
+  return null
+}
+
 // Public page for a Hardcover series (#1708).
 //
 // hardcover.app routes series on their slug, not on the numeric id Bindery

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   hardcoverSeriesUrl,
+  metadataRetrievedDate,
   metadataSourceLink,
   providerDisplayName,
   providerFromBookForeignId,
@@ -87,6 +88,20 @@ describe('metadataSourceLink', () => {
     expect(metadataSourceLink(undefined, 'book')).toBeNull()
     expect(metadataSourceLink('gb:', 'book')).toBeNull()
     expect(metadataSourceLink('OL123', 'author')).toBeNull() // no trailing A
+  })
+})
+
+describe('metadataRetrievedDate', () => {
+  it('prefers the last metadata fetch, then the date the row was added', () => {
+    expect(metadataRetrievedDate({ lastMetadataRefreshAt: '2026-10-09T18:30:00Z', createdAt: '2026-10-02T09:00:00Z' })).toBe('2026-10-09')
+    expect(metadataRetrievedDate({ lastMetadataRefreshAt: null, createdAt: '2026-10-02T09:00:00Z' })).toBe('2026-10-02')
+  })
+
+  it('returns null when there is no usable date', () => {
+    expect(metadataRetrievedDate(undefined)).toBeNull()
+    expect(metadataRetrievedDate({})).toBeNull()
+    expect(metadataRetrievedDate({ createdAt: 'not a date' })).toBeNull()
+    expect(metadataRetrievedDate({ createdAt: '0001-01-01T00:00:00Z' })).toBeNull()
   })
 })
 
