@@ -1,12 +1,14 @@
 package httpsec
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Outbound-proxy state. All of these are written once during startup by
@@ -122,27 +124,68 @@ func DefaultProxyTransport() http.RoundTripper {
 }
 
 // GuardedTransport returns a RoundTripper that re-validates the resolved IP on
-// every dial against policy, closing the DNS-rebind TOCTOU window between an
-// up-front ValidateOutboundURL check and the actual connect. For clients that
-// follow redirects it also catches a redirect to a forbidden host at dial time.
+// every direct dial against policy, closing the DNS-rebind TOCTOU window
+// between an up-front ValidateOutboundURL check and the actual connect. For
+// clients that follow redirects it also catches a redirect to a forbidden host
+// at dial time.
 //
-// When an outbound proxy is configured the dial targets the operator-trusted
-// proxy (not the destination host), so a per-dial recheck would re-validate the
-// proxy's own address and break a LAN/loopback proxy; in that case the shared
-// proxy transport is returned unchanged and callers rely on the up-front
-// validation (the rebind recheck cannot see past the proxy anyway). It clones
+// When an outbound proxy is configured, a dial to the operator-trusted proxy
+// itself is not checked (a per-dial recheck would reject a LAN or loopback
+// proxy). A dial to anything else is a direct connection, which is what happens
+// for a destination on the proxy bypass list (bypassLocal or no-proxy), and
+// that one is checked against policy exactly as on the no-proxy path. A
+// destination that goes through the proxy is only seen as the proxy address, so
+// for those the up-front validation remains the guard. It clones
 // DefaultProxyTransport so installing DialContext never mutates the shared pool.
 func GuardedTransport(policy Policy) http.RoundTripper {
 	base := DefaultProxyTransport()
-	if ProxyFunc() != nil {
-		return base
-	}
 	if t, ok := base.(*http.Transport); ok {
 		c := t.Clone()
-		c.DialContext = NewDialContext(policy)
+		c.DialContext = guardedDialContext(policy)
 		return c
 	}
-	return &http.Transport{DialContext: NewDialContext(policy)}
+	return &http.Transport{DialContext: guardedDialContext(policy)}
+}
+
+// guardedDialContext is NewDialContext(policy), except that while an outbound
+// proxy is configured a dial to the proxy's own address bypasses the policy.
+func guardedDialContext(policy Policy) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	guarded := NewDialContext(policy)
+	if outboundProxyURL == nil {
+		return guarded
+	}
+	plain := (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if isProxyAddr(addr) {
+			return plain(ctx, network, addr)
+		}
+		return guarded(ctx, network, addr)
+	}
+}
+
+// isProxyAddr reports whether addr ("host:port") is the configured outbound
+// proxy's own address. Scheme default ports apply when the proxy URL has none.
+func isProxyAddr(addr string) bool {
+	u := outboundProxyURL
+	if u == nil {
+		return false
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	pport := u.Port()
+	if pport == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			pport = "443"
+		case "socks5":
+			pport = "1080"
+		default:
+			pport = "80"
+		}
+	}
+	return strings.EqualFold(host, u.Hostname()) && port == pport
 }
 
 // bypassProxyForHost reports whether requests to host should skip the proxy and

@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // resetProxy clears any configured outbound proxy. Registered via t.Cleanup so
@@ -269,5 +271,135 @@ func TestProxyResolver_NoProxyConfigured(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
 	if u, err := proxyResolver(req); u != nil || err != nil {
 		t.Errorf("proxyResolver with no proxy = %v, %v; want nil, nil", u, err)
+	}
+}
+
+// countingServer is an httptest server that counts the requests it serves.
+func countingServer(t *testing.T) (*httptest.Server, *int32) {
+	t.Helper()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+func guardedFetch(t *testing.T, policy Policy, target string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: GuardedTransport(policy), Timeout: 3 * time.Second}
+	return client.Do(req)
+}
+
+// S3: with an outbound proxy configured, a destination on the bypass list is
+// dialled directly, and that direct dial must still go through the policy
+// check. Before the fix GuardedTransport returned the bare proxy transport, so
+// a bypassed loopback / link-local target was reached with no dial-time check.
+func TestGuardedTransport_ProxyBypassedHostIsPolicyChecked(t *testing.T) {
+	resetProxy(t)
+	proxySrv, proxyHits := countingServer(t)
+	if _, err := ConfigureOutboundProxy(proxySrv.URL, "", true); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	target, targetHits := countingServer(t) // loopback: bypassed because bypassLocal is on
+
+	resp, err := guardedFetch(t, PolicyStrict, target.URL)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("bypassed loopback target under PolicyStrict was reached; want a policy refusal")
+	}
+	if !strings.Contains(err.Error(), "loopback") {
+		t.Errorf("error = %v; want the loopback policy refusal", err)
+	}
+	if atomic.LoadInt32(targetHits) != 0 || atomic.LoadInt32(proxyHits) != 0 {
+		t.Errorf("target hits %d, proxy hits %d; want 0 and 0", *targetHits, *proxyHits)
+	}
+}
+
+// A no-proxy entry for a metadata address must be refused at dial time under
+// every policy, including the permissive PolicyLANLoopback.
+func TestGuardedTransport_ProxyNoProxyMetadataHostRefused(t *testing.T) {
+	resetProxy(t)
+	proxySrv, _ := countingServer(t)
+	if _, err := ConfigureOutboundProxy(proxySrv.URL, "169.254.169.254", false); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	for _, policy := range []Policy{PolicyStrict, PolicyLAN, PolicyLANLoopback} {
+		resp, err := guardedFetch(t, policy, "http://169.254.169.254/latest/meta-data/")
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("policy %d: metadata address reached; want refusal", policy)
+		}
+		if !strings.Contains(err.Error(), "link-local") {
+			t.Errorf("policy %d: error = %v; want the link-local refusal", policy, err)
+		}
+	}
+}
+
+// The dial to the proxy itself is operator configured and must not be checked
+// against the policy: a loopback proxy under PolicyStrict still carries a
+// proxied request. Without this the fix would break every LAN proxy.
+func TestGuardedTransport_ProxyItselfIsNotPolicyChecked(t *testing.T) {
+	resetProxy(t)
+	proxySrv, proxyHits := countingServer(t)
+	if _, err := ConfigureOutboundProxy(proxySrv.URL, "", false); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	resp, err := guardedFetch(t, PolicyStrict, "http://some-public-host.example/x")
+	if err != nil {
+		t.Fatalf("proxied request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if atomic.LoadInt32(proxyHits) != 1 {
+		t.Errorf("proxy hits = %d; want 1", atomic.LoadInt32(proxyHits))
+	}
+}
+
+// PolicyLANLoopback (download clients, Prowlarr) still reaches a bypassed LAN
+// or loopback target directly.
+func TestGuardedTransport_ProxyBypassedLoopbackAllowedUnderLANLoopback(t *testing.T) {
+	resetProxy(t)
+	proxySrv, proxyHits := countingServer(t)
+	if _, err := ConfigureOutboundProxy(proxySrv.URL, "", true); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	target, targetHits := countingServer(t)
+	resp, err := guardedFetch(t, PolicyLANLoopback, target.URL)
+	if err != nil {
+		t.Fatalf("bypassed loopback target under PolicyLANLoopback: %v", err)
+	}
+	_ = resp.Body.Close()
+	if atomic.LoadInt32(targetHits) != 1 || atomic.LoadInt32(proxyHits) != 0 {
+		t.Errorf("target hits %d, proxy hits %d; want 1 and 0", *targetHits, *proxyHits)
+	}
+}
+
+func TestIsProxyAddr(t *testing.T) {
+	resetProxy(t)
+	cases := []struct {
+		proxy, addr string
+		want        bool
+	}{
+		{"http://proxy.lan:3128", "proxy.lan:3128", true},
+		{"http://Proxy.LAN:3128", "proxy.lan:3128", true},
+		{"http://proxy.lan", "proxy.lan:80", true},
+		{"https://proxy.lan", "proxy.lan:443", true},
+		{"socks5://proxy.lan", "proxy.lan:1080", true},
+		{"http://proxy.lan:3128", "proxy.lan:3129", false},
+		{"http://proxy.lan:3128", "other.lan:3128", false},
+		{"http://[::1]:3128", "[::1]:3128", true},
+	}
+	for _, c := range cases {
+		if _, err := ConfigureOutboundProxy(c.proxy, "", true); err != nil {
+			t.Fatalf("configure %q: %v", c.proxy, err)
+		}
+		if got := isProxyAddr(c.addr); got != c.want {
+			t.Errorf("isProxyAddr(%q) with proxy %q = %v; want %v", c.addr, c.proxy, got, c.want)
+		}
 	}
 }

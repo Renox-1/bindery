@@ -100,36 +100,16 @@ func (h *ImageProxyHandler) WithLocalCovers(store *covers.Store) *ImageProxyHand
 	return h
 }
 
-// imageProxyTransport returns the RoundTripper for the image-proxy client.
+// imageProxyTransport returns the RoundTripper for the image-proxy client: a
+// clone of the shared proxy transport with a per-dial PolicyStrict SSRF
+// re-validation (httpsec.GuardedTransport), closing the DNS-rebind TOCTOU
+// window between the up-front URL validation and the actual dial.
 //
-// On the direct (no outbound proxy) path it installs a per-request
-// SSRF-revalidating DialContext, closing the DNS-rebind TOCTOU window between
-// the up-front URL validation and the actual dial. It starts from
-// httpsec.DefaultProxyTransport() and clones it so installing DialContext does
-// not mutate the shared transport.
-//
-// When an outbound proxy IS configured (#987) the transport dials the *proxy*,
-// not the upstream host, so a PolicyStrict DialContext would re-validate the
-// proxy's own address and reject a LAN/loopback proxy — breaking every cover
-// fetch. In that case we return the shared proxy transport unchanged and rely on
-// the up-front h.validateURL plus the CheckRedirect hook for upstream SSRF: the
-// proxy is operator-configured and trusted, and the rebind re-check cannot see
-// past it anyway (the dial only reaches the proxy address). The strict per-dial
-// re-check therefore applies only to the direct path, where it is both meaningful
-// and the place a rebind would actually land.
+// When an outbound proxy is configured (#987) the dial to the operator-trusted
+// proxy itself is exempt, so a LAN or loopback proxy keeps working; a request
+// that the proxy bypass rules send direct is checked like any direct dial.
 func imageProxyTransport() http.RoundTripper {
-	base := httpsec.DefaultProxyTransport()
-	if httpsec.ProxyFunc() != nil {
-		return base
-	}
-	if t, ok := base.(*http.Transport); ok {
-		c := t.Clone()
-		c.DialContext = httpsec.NewDialContext(httpsec.PolicyStrict)
-		return c
-	}
-	return &http.Transport{
-		DialContext: httpsec.NewDialContext(httpsec.PolicyStrict),
-	}
+	return httpsec.GuardedTransport(httpsec.PolicyStrict)
 }
 
 // allowedImageContentType reports whether a Content-Type may be proxied back
