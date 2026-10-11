@@ -409,7 +409,7 @@ func TestWriteAddBookError_Statuses(t *testing.T) {
 		{"primary provider unavailable", &primaryProviderUnavailableError{Primary: "hardcover"}, http.StatusServiceUnavailable,
 			errorBody("The primary metadata provider (hardcover) did not answer, so no record from another provider was used. Please try again once it responds.")},
 		{"book lookup failed", &addBookLookupError{Err: errors.New("look up book metadata: boom")}, http.StatusBadGateway,
-			errorBody("look up book metadata: boom")},
+			errorBody("metadata provider unavailable")},
 		{"unknown error", errors.New("disk on fire"), http.StatusInternalServerError,
 			errorBody("internal server error")},
 	})

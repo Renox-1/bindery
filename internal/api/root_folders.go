@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -48,7 +49,10 @@ func (h *RootFolderHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	info, err := os.Stat(req.Path)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path does not exist or is not accessible: " + err.Error()})
+		// The os error carries the submitted path and the errno, and this
+		// endpoint would otherwise tell a caller whether any path exists.
+		slog.Warn("root folder: path not accessible", "path", req.Path, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path does not exist or is not accessible"})
 		return
 	}
 	if !info.IsDir() {

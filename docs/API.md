@@ -193,6 +193,12 @@ move that author onto the fallback (#2271). Retry once the primary is
 answering, or send an explicit `foreignAuthorId`, which skips the search
 entirely.
 
+Any other provider failure on a relink, a relink candidate search, a book
+rebind, an audiobook enrich or an add book answers **502** with the fixed
+message `metadata provider unavailable`. The provider's own error text embeds
+its request URL (and so an API key and the resolver address), so it goes to the
+Bindery log and not to the client.
+
 `GET /api/v1/author/{id}/duplicate-candidates` reports groups of the author's
 books whose titles look like the same book, for human review (#1970). It is
 read-only: it never writes, and the review UI's only action is the existing
@@ -400,8 +406,11 @@ GET    /api/v1/prowlarr/{id}                      fetch one (admin)
 POST   /api/v1/prowlarr                           add a Prowlarr server (admin)
 PUT    /api/v1/prowlarr/{id}                      update (admin)
 DELETE /api/v1/prowlarr/{id}                      remove (admin)
-POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin)
-POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr (admin)
+POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin); always 200, with "ok":"false" and
+                                                  "error" (the first line of what Prowlarr said, redacted, at
+                                                  most 200 characters) when the probe fails
+POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr (admin); 502 with the same
+                                                  shortened "error" when Prowlarr fails
 
 GET    /api/v1/rootfolder                         list library roots
 POST   /api/v1/rootfolder                         add a new root (admin)
@@ -564,6 +573,12 @@ POST   /api/v1/queue/grab                         submit a search result to the 
                                                   "forceAvailable":true means it is your own imported row and
                                                   the same grab with "force":true re-grabs it (reuses the row,
                                                   removes nothing from the client)
+                                                  400 with "code":"no_download_client" when no enabled client
+                                                  can take the release (the message names the protocol); 502
+                                                  "failed to send the release to the download client" when the
+                                                  client refused it or could not be reached (the cause is in
+                                                  the log and on the queue row); 500 for a storage fault.
+                                                  /queue/{id}/retry answers the same way
 POST   /api/v1/queue/{id}/retry-import           retry an importFailed/importBlocked item without re-downloading
 POST   /api/v1/queue/{id}/retry                   re-send a failed item's release to the download client (no re-search)
 POST   /api/v1/queue/bulk-retry                   retry many; {"ids":[..]}; per id {"ok":true,"action":"import"|"resend"}
@@ -698,6 +713,15 @@ the saved client's `id` and the handler fills in a credential you left blank
 from that row, but only while `type`, `host`, `port`, `useSsl` and `urlBase`
 still match it. Point the probe anywhere else and it runs with whatever
 credential the body carried.
+
+Both probes (`POST /api/v1/downloadclient/test` and
+`POST /api/v1/downloadclient/{id}/test`) answer `400` for a host or URL Bindery
+refuses to call, and `502` when the client was called and the probe failed. The
+`error` of a `502` is never the raw failure text. A refused or timed out
+connection gets Bindery's own hint (`could not reach the download client`
+followed by what to check) with no URL in it; anything else is the first line of
+what the client said, credentials redacted, at most 200 characters. The full
+text is in the Bindery log.
 
 #### Diagnosing a download client
 
