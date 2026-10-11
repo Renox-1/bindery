@@ -32,11 +32,13 @@ func TestNewClientsShareOnePacerAndGate(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport = %T, want the pacer in front of every request", a.http.Transport)
 	}
-	if pb := b.http.Transport.(*pacedTransport); pa.pacer != pb.pacer || pa.pacer != defaultPacer {
+	// Compared with the package defaults, not only with each other: two nil
+	// gates are equal, and a nil gate holds nothing while BnF refuses (#3100).
+	if pb := b.http.Transport.(*pacedTransport); pa.pacer == nil || pa.pacer != defaultPacer || pb.pacer != defaultPacer {
 		t.Error("clients have their own pacers; the limit must hold for the process")
 	}
-	if a.gate != b.gate {
-		t.Error("clients have their own refusal gates")
+	if a.gate == nil || a.gate != defaultGate || b.gate != defaultGate {
+		t.Errorf("gates = %p, %p, want both the shared refusal gate %p", a.gate, b.gate, defaultGate)
 	}
 	if defaultPacer.interval < time.Second || cap(defaultPacer.slots) > 2 {
 		t.Errorf("default pacing = %v, %d concurrent; want at most one start a second and two in flight",
@@ -114,6 +116,39 @@ func TestPacer_CapsConcurrentRequests(t *testing.T) {
 	if got := peak.Load(); got > 2 {
 		t.Errorf("peak concurrent requests = %d, want at most 2", got)
 	}
+}
+
+// The concurrency slot is held until the response body is closed, not just
+// until the headers arrive: a slow download still counts as in flight.
+func TestPacer_SlotHeldUntilBodyClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(emptySRU))
+	}))
+	defer srv.Close()
+	tr := &pacedTransport{base: http.DefaultTransport, pacer: newPacer(0, 1)}
+	get := func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr.RoundTrip(req)
+	}
+	first, err := get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if resp, err := get(ctx); err == nil {
+		_ = resp.Body.Close()
+		t.Error("second request started while the first body was still open; want it held for the slot")
+	}
+	_ = first.Body.Close()
+	second, err := get(context.Background())
+	if err != nil {
+		t.Fatalf("after the first body closed: %v", err)
+	}
+	_ = second.Body.Close()
 }
 
 // A request that could only start after its caller's deadline is refused at

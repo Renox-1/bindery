@@ -203,6 +203,22 @@ func TestGroupWorks_TranslationsOfOneOriginalAreOneWork(t *testing.T) {
 	}
 }
 
+// The French edition represents the work even when an edition in another
+// language was entered on file earlier and comes first in the results.
+func TestGroupWorks_FrenchEditionRepresentsTheWork(t *testing.T) {
+	books := groupWorks([]edition{
+		edWith("cb10000001a", "Alice's adventures in Wonderland", "", "eng", "19800101", carroll),
+		edWith("cb10000002b", "Alice au pays des merveilles", "Alice's adventures in Wonderland", "fre", "20000101", carroll),
+		edWith("cb10000003c", "Alicia en el país de las maravillas", "Alice's adventures in Wonderland", "spa", "19700101", carroll),
+	}, "")
+	if len(books) != 1 {
+		t.Fatalf("works = %d, want 1", len(books))
+	}
+	if b := books[0]; b.ForeignID != "bnf:cb10000002b" || b.Title != "Alice au pays des merveilles" || b.Language != "fre" {
+		t.Errorf("work = %s %q %s, want the French edition bnf:cb10000002b", b.ForeignID, b.Title, b.Language)
+	}
+}
+
 func TestGroupWorks_TranslatorIsNeverTheAuthor(t *testing.T) {
 	unlinked := credit{surname: "Carroll", forename: "Lewis", author: true}
 	books := groupWorks([]edition{edWith("cb10000001a", "Alice au pays des merveilles", "", "fre", "", unlinked, bue)}, "")
@@ -260,6 +276,22 @@ func TestCQLTerm(t *testing.T) {
 		`   `:                                     ``,
 	}
 	for in, want := range cases {
+		if got := cqlTerm(in); got != want {
+			t.Errorf("cqlTerm(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Control characters that strings.Fields does not split on (NUL, SOH,
+	// DEL, the C1 non-sorting markers) are only removed by the replacement
+	// itself. Vertical tab, form feed, NEL and the line separator are
+	// whitespace to strings.Fields as well; they are here so a change to
+	// either step is seen.
+	controls := map[string]string{
+		"nul\x00byte":           `"nul byte"`,
+		"soh\x01del\x7fend":     `"soh del end"`,
+		"\u0098Les \u009cmots":  `"Les mots"`,
+		"vt\vff\fnel\u0085ls x": `"vt ff nel ls x"`,
+	}
+	for in, want := range controls {
 		if got := cqlTerm(in); got != want {
 			t.Errorf("cqlTerm(%q) = %q, want %q", in, got, want)
 		}

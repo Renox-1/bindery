@@ -345,6 +345,53 @@ func TestGetBook(t *testing.T) {
 	}
 }
 
+// GetBook returns the whole work: the requested record plus the other
+// editions found by author and title, under the ID that was asked for.
+func TestGetBook_AddsTheWorksOtherEditions(t *testing.T) {
+	rec := func(ark, entered, isbn string) string {
+		return `<record><recordData><record id="ark:/12148/` + ark + `" type="Bibliographic"><leader>     nam  22        450 </leader>` +
+			`<datafield tag="010" ind1=" " ind2=" "><subfield code="a">` + isbn + `</subfield></datafield>` +
+			`<datafield tag="100" ind1=" " ind2=" "><subfield code="a">` + entered + `d2000    m  y0frey50      ba</subfield></datafield>` +
+			`<datafield tag="101" ind1="0" ind2=" "><subfield code="a">fre</subfield></datafield>` +
+			`<datafield tag="200" ind1="1" ind2=" "><subfield code="a">Alice au pays des merveilles</subfield></datafield>` +
+			`<datafield tag="700" ind1=" " ind2=" "><subfield code="3">11885918</subfield><subfield code="a">Carroll</subfield><subfield code="b">Lewis</subfield><subfield code="4">070</subfield></datafield>` +
+			`</record></recordData></record>`
+	}
+	wrap := func(records string) string {
+		return `<searchRetrieveResponse><numberOfRecords>2</numberOfRecords><records>` + records + `</records></searchRetrieveResponse>`
+	}
+	fs := &fixtureServer{}
+	fs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		fs.mu.Lock()
+		fs.queries = append(fs.queries, q)
+		fs.mu.Unlock()
+		switch {
+		case strings.Contains(q, "bib.persistentid"):
+			_, _ = w.Write([]byte(wrap(rec("cb20000002b", "20050101", "978-2-07-000001-0"))))
+		case strings.Contains(q, "bib.author2bib"):
+			_, _ = w.Write([]byte(wrap(rec("cb20000001c", "19900101", "978-2-07-000002-7") + rec("cb20000002b", "20050101", "978-2-07-000001-0"))))
+		default:
+			_, _ = w.Write([]byte(emptySRU))
+		}
+	}))
+	defer fs.Close()
+	b, err := testClient(fs.URL).GetBook(context.Background(), "bnf:cb20000002b")
+	if err != nil || b == nil {
+		t.Fatalf("book = %+v err = %v", b, err)
+	}
+	if b.ForeignID != "bnf:cb20000002b" {
+		t.Errorf("ForeignID = %q, want the requested record's", b.ForeignID)
+	}
+	if len(b.Editions) != 2 {
+		t.Errorf("editions = %d, want the requested record and the other edition of the work", len(b.Editions))
+	}
+	sent := fs.sent()
+	if len(sent) != 2 || sent[1] != `bib.author2bib any "11885918" and bib.title all "Alice au pays des merveilles" and bib.doctype any "a"` {
+		t.Errorf("queries = %v, want the record, then its work by author and title", sent)
+	}
+}
+
 func TestEmptyResultIsNotAnError(t *testing.T) {
 	fs := newFixtureServer(t, func(url.Values) string { return "empty.xml" })
 	c := testClient(fs.URL)
