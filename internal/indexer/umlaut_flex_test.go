@@ -1,12 +1,18 @@
 package indexer
 
 import (
+	"context"
+	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/vavallee/bindery/internal/indexer/newznab"
+	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 // umlautFlexCases pin the rule from #3123. A keyword may match the compact
@@ -186,5 +192,116 @@ func TestLanguageTagDigraphsAreClassified(t *testing.T) {
 		if isUmlaut == notUmlauts[tag] {
 			t.Errorf("tag %q carries ae/oe/ue: list it in releaseLanguageTagKeywords if it was an umlaut, or in this test's notUmlauts if not", tag)
 		}
+	}
+}
+
+// TestKeywordMatchesEverySpellingProperty is a property round over random
+// words built from German, Dutch and Nordic syllables. Whatever the word, a
+// source holding the real letters must find a release spelling it with the
+// umlaut, the expanded digraph or the bare vowel, in both Unicode forms, and a
+// source typed in ASCII must find its own spelling and the umlaut one. The
+// letters ø, å and æ are not umlauts: they match themselves only.
+func TestKeywordMatchesEverySpellingProperty(t *testing.T) {
+	syllables := []string{"mül", "ler", "schön", "berg", "bjö", "rn", "mär", "chen", "hör", "buch",
+		"jür", "gen", "böl", "dür", "ren", "matt", "käse", "säu", "ger", "stra", "ße",
+		"boek", "roel", "joel", "ma", "ri", "ka", "ten", "sjö", "wall", "mä", "ke", "lä",
+		"åsa", "bjørn", "ægir", "dan", "ber", "ge", "sam", "uel", "mich", "ael"}
+	bare := strings.NewReplacer("ä", "a", "ö", "o", "ü", "u", "ß", "ss")
+	rng := rand.New(rand.NewSource(3123))
+	for i := 0; i < 2000; i++ {
+		var w strings.Builder
+		for n := 1 + rng.Intn(3); n > 0; n-- {
+			w.WriteString(syllables[rng.Intn(len(syllables))])
+		}
+		word := w.String()
+		if len(newznab.SigWords(word)) != 1 {
+			continue
+		}
+		hasUmlaut := strings.ContainsAny(word, "äöü")
+		expanded := textutil.TransliterateUmlauts(word)
+		compact := bare.Replace(word)
+		for _, form := range []norm.Form{norm.NFC, norm.NFD} {
+			// Source holds the real letters.
+			kw := newznab.SigWords(form.String(word))[0]
+			re := WordBoundaryRegex(kw)
+			for name, rel := range map[string]string{"self": word, "expanded": expanded} {
+				if !re.MatchString(NormalizeRelease(form.String(rel))) {
+					t.Fatalf("form %v: source %q (kw %q) missed its %s spelling %q", form, word, kw, name, rel)
+				}
+			}
+			if hasUmlaut && !re.MatchString(NormalizeRelease(form.String(compact))) {
+				t.Fatalf("form %v: source %q (kw %q) missed its compact spelling %q", form, word, kw, compact)
+			}
+			// Source typed in ASCII meets its own spelling and the umlaut one.
+			if hasUmlaut {
+				asciiKw := newznab.SigWords(expanded)[0]
+				if !WordBoundaryRegex(asciiKw).MatchString(NormalizeRelease(form.String(word))) {
+					t.Fatalf("form %v: ASCII source %q missed the umlaut spelling %q", form, expanded, word)
+				}
+			}
+			// Author tokens are a separate producer and must agree.
+			toks := authorTokens(form.String(word))
+			if len(toks) == 1 && !authorMatchesRelease(NormalizeRelease(form.String(expanded)), toks) {
+				t.Fatalf("form %v: author token %q (from %q) missed %q", form, toks[0], word, expanded)
+			}
+		}
+	}
+}
+
+// Callers outside the keyword producers may hand WordBoundaryRegex a keyword
+// that was not lowercased; the flex is the same for a capital umlaut.
+func TestUmlautFlexAcceptsCapitalUmlaut(t *testing.T) {
+	for _, kw := range []string{"MÜLLER", "Müller", "müller"} {
+		if !WordBoundaryRegex(kw).MatchString("muller") {
+			t.Errorf("WordBoundaryRegex(%q) missed the compact spelling", kw)
+		}
+	}
+}
+
+// TestSearchBook_FindsDecomposedUmlautRelease runs #3137 and #3123 together: a
+// tracker that stores the release title decomposed (u + U+0308) and matches
+// query bytes literally answers only the decomposed retry. The title and the
+// author both carry umlauts, so the keywords keep them and the decomposed
+// release has to be read as the composed one before the regex sees it.
+func TestSearchBook_FindsDecomposedUmlautRelease(t *testing.T) {
+	nfdTitle := norm.NFD.String("Jürgen Müller - Märchen")
+	rssBody := `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <newznab:response offset="0" total="1"/>
+    <item>
+      <title>` + nfdTitle + `</title>
+      <guid isPermaLink="false">guid-nfd-umlaut</guid>
+      <enclosure url="https://fake/dl/1" length="1000" type="application/x-bittorrent"/>
+    </item>
+  </channel>
+</rss>`
+	const emptyBody = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel></channel></rss>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		q := r.URL.Query()
+		if strings.ContainsRune(q.Get("title")+q.Get("author")+q.Get("q"), '̈') {
+			w.Write([]byte(rssBody))
+			return
+		}
+		w.Write([]byte(emptyBody))
+	}))
+	defer srv.Close()
+
+	idxs := []models.Indexer{{ID: 1, Name: "test", URL: srv.URL, Enabled: true, Categories: []int{3030}}}
+	for _, c := range []struct{ name, title, author string }{
+		{"composed source", "Märchen", "Jürgen Müller"},
+		{"decomposed source", norm.NFD.String("Märchen"), norm.NFD.String("Jürgen Müller")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			results := newTestSearcher().SearchBook(context.Background(), idxs, MatchCriteria{
+				Title: c.title, Author: c.author,
+			})
+			if len(results) != 1 || results[0].GUID != "guid-nfd-umlaut" {
+				t.Fatalf("SearchBook = %v, want the decomposed release", resultTitles(results))
+			}
+		})
 	}
 }
