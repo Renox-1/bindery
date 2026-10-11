@@ -158,6 +158,10 @@ func (h *ManualImportHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	// The catalogue book is a library row, so its stored cover goes through
+	// the proxy like every other book answer (#3146).
+	result.Book = proxiedBook(result.Book)
+	result.Candidates = proxiedBooks(result.Candidates)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -825,8 +829,8 @@ func (h *ManualImportHandler) Scan(w http.ResponseWriter, r *http.Request) {
 				ParsedTitle:     res.ParsedTitle,
 				ParsedAuthor:    res.ParsedAuthor,
 				DetectedFormat:  res.DetectedFormat,
-				Book:            res.Book,
-				Candidates:      res.Candidates,
+				Book:            proxiedBook(res.Book),
+				Candidates:      proxiedBooks(res.Candidates),
 				AlreadyImported: alreadyImported,
 			})
 		}
