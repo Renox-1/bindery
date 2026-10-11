@@ -792,11 +792,14 @@ like everything else on that tab that names server paths.
 - **BnF** suits a library of French editions whose indexers name releases
   after the French title ("Alice au pays des merveilles", not "Alice's
   Adventures in Wonderland"). Its data is under the Licence Ouverte / Open
-  Licence 2.0, credited in Settings where you choose it; Bindery fetches no
-  covers from BnF, so covers come from the other providers. BnF is moving its
-  catalogue to a new record model until the end of 2026, and records created
-  since June 2026 are not yet linked to their author, so Bindery finds those by
-  the author's name and treats an author's BnF catalogue as possibly
+  Licence 2.0, credited in Settings where you choose it, and each BnF book and
+  author page shows the credit with the date its record was retrieved;
+  Bindery fetches no covers from BnF, so covers come from the other
+  providers. BnF is moving its catalogue to a new record model until the end
+  of 2026, and records created since June 2026 are not yet linked to their
+  author, so Bindery finds those by the author's name, only when no other
+  person in BnF's authority file has the same name, and treats an author's
+  BnF catalogue as possibly
   incomplete: catalogue reconciliation never offers to remove a book because
   BnF did not list it. BnF publishes no rate limit, so Bindery sends it at most
   one request a second; refreshing an author with a long catalogue can take

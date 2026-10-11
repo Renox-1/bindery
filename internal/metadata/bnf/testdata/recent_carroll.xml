@@ -106,10 +106,6 @@
 <mxc:subfield code="a">FR</mxc:subfield>
 <mxc:subfield code="b">FR-751131015</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">1239559</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
-</mxc:datafield>
 </mxc:record>      </srw:recordData>
 <srw:recordIdentifier>ark:/12148/cb48780493c</srw:recordIdentifier>
 <srw:recordPosition>1</srw:recordPosition>

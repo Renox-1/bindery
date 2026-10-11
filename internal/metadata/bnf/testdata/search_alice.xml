@@ -106,10 +106,6 @@
 <mxc:subfield code="a">FR</mxc:subfield>
 <mxc:subfield code="b">FR-751131015</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">1239559</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
-</mxc:datafield>
 </mxc:record>      </srw:recordData>
 <srw:recordIdentifier>ark:/12148/cb48780493c</srw:recordIdentifier>
 <srw:recordPosition>1</srw:recordPosition>
@@ -211,10 +207,6 @@
 <mxc:subfield code="c">20251007</mxc:subfield>
 <mxc:subfield code="g">onix/3.0</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">1140279</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
-</mxc:datafield>
 <mxc:datafield tag="930" ind1=" " ind2=" ">
 <mxc:subfield code="5">FR-759999999:48655760001001</mxc:subfield>
 <mxc:subfield code="a">LNUM-61586</mxc:subfield>
@@ -311,10 +303,6 @@
 <mxc:subfield code="g">AFNOR</mxc:subfield>
 <mxc:subfield code="h">FRBNF477075420000005</mxc:subfield>
 <mxc:subfield code="2">intermrc</mxc:subfield>
-</mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">1046685</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
 </mxc:datafield>
 </mxc:record>      </srw:recordData>
 <srw:recordIdentifier>ark:/12148/cb47707542n</srw:recordIdentifier>

@@ -84,10 +84,6 @@
 <mxc:subfield code="a">LC authorities - https://lccn.loc.gov/no98007589 (2024-07-29)</mxc:subfield>
 <mxc:subfield code="a">Jukebox magazine n °92, mai 1995</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2=" ">
-<mxc:subfield code="u">https://lccn.loc.gov/no98007589</mxc:subfield>
-<mxc:subfield code="e">2024-07-29</mxc:subfield>
-</mxc:datafield>
 </mxc:record>      </srw:recordData>
 <srw:recordIdentifier>ark:/12148/cb139769982</srw:recordIdentifier>
 <srw:recordPosition>1</srw:recordPosition>

@@ -360,10 +360,6 @@
 <mxc:subfield code="h">FRBNF456640410000002</mxc:subfield>
 <mxc:subfield code="2">intermrc</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">358844</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
-</mxc:datafield>
 <mxc:datafield tag="930" ind1=" " ind2=" ">
 <mxc:subfield code="5">FR-751131010:45664041001001</mxc:subfield>
 <mxc:subfield code="a">2019-26949</mxc:subfield>

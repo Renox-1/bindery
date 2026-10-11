@@ -131,10 +131,6 @@
 <mxc:subfield code="h">FRBNF434747910000007</mxc:subfield>
 <mxc:subfield code="2">intermrc</mxc:subfield>
 </mxc:datafield>
-<mxc:datafield tag="856" ind1=" " ind2="2">
-<mxc:subfield code="u">120251</mxc:subfield>
-<mxc:subfield code="b">Première de couverture</mxc:subfield>
-</mxc:datafield>
 </mxc:record>      </srw:recordData>
 <srw:recordIdentifier>ark:/12148/cb434747912</srw:recordIdentifier>
 <srw:recordPosition>1</srw:recordPosition>
