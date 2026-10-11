@@ -34,6 +34,22 @@ names arrive from providers in every romanisation and the goal is one identity
 per human. That divergence is deliberate and is asserted by
 `TestDiacriticSchemesAreTheDocumentedOnes`.
 
+Alphabet 1 has one variant, `textutil.FoldForKeyword`, for the keyword side
+(`newznab.SigWords`, `indexer.authorTokens`, the title identity keywords). It is
+the same fold except that ä, ö and ü are kept instead of expanded. The reason is
+the compact release spelling: a release for "Müller" may be named Müller,
+Mueller or Muller, so the keyword regex makes the "e" of an umlaut digraph
+optional. That flex used to apply to every `ae`, `oe` and `ue`, which let
+"Michael" match a release naming "Michal" and "Samuel" match "Samul" (#3123).
+Once folded, "Michael" and "Mueller" look alike, so the knowledge of which
+digraph began as an umlaut has to travel on the keyword, and the umlaut is how.
+`indexer.keywordPattern` turns ü into `ue?` and treats a typed `ue` literally.
+The cost is deliberate: a source typed in ASCII ("Mueller", "Bjoern") no longer
+matches a release that dropped the umlaut ("Muller", "Bjorn"), because a typed
+digraph is taken at its word. A keyword is not in the release alphabet, so it
+must not be compared to a release string with `==` or `Contains` without
+`TransliterateUmlauts` first.
+
 **Alphabets 3, 4 and 6 are lossy and must never decide identity.** 6 in
 particular is a *recall* key: two distinct works may share a `search_key`, which
 only means both are offered to someone who typed either spelling. The `unmatched_units` key is rebuilt whenever a scan re-upserts the row, so unlike the other three it is not part of the `FoldForSearchRev` backfill.
