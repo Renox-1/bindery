@@ -136,7 +136,7 @@ func (c *Client) SearchAuthors(ctx context.Context, query string) ([]models.Auth
 		return nil, nil
 	}
 	words := strings.Fields(strings.Trim(term, `"`))
-	auths, err := c.searchAuthorities(ctx, term, authorSearchSize)
+	auths, _, err := c.searchAuthorities(ctx, term, authorSearchSize)
 	if err != nil {
 		return nil, fmt.Errorf("bnf search authors: %w", err)
 	}
@@ -216,26 +216,11 @@ func (c *Client) linkUnlinked(ctx context.Context, eds []edition) []edition {
 		names = names[:maxNameLookups]
 	}
 	for _, name := range names {
-		term := cqlTerm(name.surname + " " + name.forename)
-		if term == "" {
-			continue
+		ids, err := c.namesakes(ctx, name)
+		if err != nil || len(ids) != 1 {
+			continue // no one, or two people with this heading: ambiguous
 		}
-		auths, err := c.searchAuthorities(ctx, term, 5)
-		if err != nil {
-			continue
-		}
-		id := ""
-		for _, a := range auths {
-			if !sameName(a.heading, name) {
-				continue
-			}
-			if id != "" {
-				id = "" // two people with this heading: ambiguous
-				break
-			}
-			id = a.id
-		}
-		resolved[textutil.FoldForSearch(name.sortName())] = id
+		resolved[textutil.FoldForSearch(name.sortName())] = ids[0]
 	}
 	out := make([]edition, len(eds))
 	for i, ed := range eds {
@@ -257,13 +242,44 @@ func (c *Client) linkUnlinked(ctx context.Context, eds []edition) []edition {
 	return out
 }
 
-// searchAuthorities searches person authority records by name. Only the
-// "pep" (person) type is ever asked for: Bindery has no use for, and never
-// queries, the Dewey or subject authority files.
-func (c *Client) searchAuthorities(ctx context.Context, term string, maxRecords int) ([]authority, error) {
-	page, err := c.searchRetrieve(ctx, "aut.accesspoint all "+term+` and aut.type any "pep"`, 1, maxRecords)
+// errTooManyNamesakes reports an authority lookup whose matches did not fit
+// in one page, so a second person with the same heading may be among those
+// not read.
+var errTooManyNamesakes = errors.New("bnf: more people match this name than one lookup reads")
+
+// namesakes returns the authority record numbers of every person whose
+// heading is exactly name's, from one lookup. When the lookup matched more
+// records than it read, a namesake could be among the rest, so it reports
+// errTooManyNamesakes rather than an answer that may be short.
+func (c *Client) namesakes(ctx context.Context, name credit) ([]string, error) {
+	term := cqlTerm(name.surname + " " + name.forename)
+	if term == "" {
+		return nil, nil
+	}
+	auths, total, err := c.searchAuthorities(ctx, term, authorSearchSize)
 	if err != nil {
 		return nil, err
+	}
+	if total < 0 || total > authorSearchSize {
+		return nil, errTooManyNamesakes
+	}
+	var ids []string
+	for _, a := range auths {
+		if sameName(a.heading, name) {
+			ids = append(ids, a.id)
+		}
+	}
+	return ids, nil
+}
+
+// searchAuthorities searches person authority records by name, and returns
+// the number of records the search matched (-1 when BnF does not say). Only
+// the "pep" (person) type is ever asked for: Bindery has no use for, and
+// never queries, the Dewey or subject authority files.
+func (c *Client) searchAuthorities(ctx context.Context, term string, maxRecords int) ([]authority, int, error) {
+	page, err := c.searchRetrieve(ctx, "aut.accesspoint all "+term+` and aut.type any "pep"`, 1, maxRecords)
+	if err != nil {
+		return nil, 0, err
 	}
 	var out []authority
 	for _, r := range page.Records {
@@ -271,7 +287,7 @@ func (c *Client) searchAuthorities(ctx context.Context, term string, maxRecords 
 			out = append(out, a)
 		}
 	}
-	return out, nil
+	return out, page.total(), nil
 }
 
 // GetAuthor resolves "bnf:author:<authority record number>" through the BnF
@@ -344,15 +360,28 @@ func (c *Client) GetAuthorWorksSnapshot(ctx context.Context, authorForeignID str
 	if term := cqlTerm(auth.heading.surname + " " + auth.heading.forename); term != "" {
 		q := "bib.author all " + term + bookFilter + ` and bib.creationdate >= "` + noemiCutover + `"`
 		if recent, err := c.searchAll(ctx, q, recentPageSize, maxRecentPages); err == nil {
-			eds = append(eds, adoptUnlinked(parseRecords(recent...), auth.heading)...)
+			if adopted := adoptUnlinked(parseRecords(recent...), auth.heading); len(adopted) > 0 && c.soleHolder(ctx, auth.heading) {
+				eds = append(eds, adopted...)
+			}
 		}
 	}
 	return groupWorks(dedupeEditions(eds), id), false, nil
 }
 
+// soleHolder reports whether heading's person is the only one in the
+// authority file with that exact heading. A name is not an identity: when a
+// namesake exists (two people called "Martin, Jean"), an unlinked credit
+// could be either, so nothing is adopted. One lookup, made only when there
+// is something to adopt; a failed or inconclusive lookup adopts nothing.
+func (c *Client) soleHolder(ctx context.Context, heading credit) bool {
+	ids, err := c.namesakes(ctx, heading)
+	return err == nil && len(ids) == 1 && ids[0] == heading.authorityID
+}
+
 // adoptUnlinked keeps the editions crediting, without an authority link, an
 // author whose name is exactly the authority heading's, and links that credit
-// to it. Editions already linked to someone are left to author2bib.
+// to it. Editions already linked to someone are left to author2bib. The
+// caller checks that no namesake shares the heading (soleHolder).
 func adoptUnlinked(eds []edition, heading credit) []edition {
 	var out []edition
 	for _, ed := range eds {

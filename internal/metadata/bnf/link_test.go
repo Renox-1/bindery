@@ -113,3 +113,81 @@ func TestLinkUnlinked(t *testing.T) {
 		}
 	}
 }
+
+// The catalogue walk's name query finds records created since the Noemi
+// cutover that BnF has not linked to anyone. Such a record is adopted into
+// the author's catalogue only when no other person in the authority file has
+// the same heading, and only through the credit with that exact name.
+func TestAdoptUnlinked_NamesakeCheck(t *testing.T) {
+	person := func(id, forename string) string {
+		return `<record><recordData><record id="ark:/12148/cb` + id + `x" type="Authority"><leader>     cx  a22        45  </leader>` +
+			`<datafield tag="200" ind1=" " ind2="0"><subfield code="a">Martin</subfield><subfield code="b">` + forename + `</subfield></datafield></record></recordData></record>`
+	}
+	recent := func(ark, surname, forename string) string {
+		return `<record><recordData><record id="ark:/12148/cb` + ark + `x" type="Bibliographic"><leader>     a    22        450 </leader>` +
+			`<datafield tag="100" ind1=" " ind2=" "><subfield code="a">20260702u2026    m  y0frey50      ba</subfield></datafield>` +
+			`<datafield tag="200" ind1="1" ind2=" "><subfield code="a">Livre de ` + forename + `</subfield></datafield>` +
+			`<datafield tag="702" ind1=" " ind2=" "><subfield code="a">` + surname + `</subfield><subfield code="b">` + forename + `</subfield><subfield code="c">Auteur du texte</subfield></datafield>` +
+			`<datafield tag="702" ind1=" " ind2=" "><subfield code="a">Martin</subfield><subfield code="b">Jean</subfield><subfield code="c">Traducteur</subfield></datafield>` +
+			`</record></recordData></record>`
+	}
+	wrap := func(records string) string {
+		return `<searchRetrieveResponse><numberOfRecords>9</numberOfRecords><records>` + records + `</records></searchRetrieveResponse>`
+	}
+	for _, tc := range []struct {
+		name        string
+		authorities string
+		recent      string
+		want        []string
+		lookups     int32
+	}{
+		{"only this person has the heading", person("11111111", "Jean") + person("33333333", "Jeanne"), recent("20000001", "Martin", "Jean"), []string{"Livre de Jean"}, 1},
+		{"two people share the heading", person("11111111", "Jean") + person("22222222", "Jean"), recent("20000001", "Martin", "Jean"), nil, 1},
+		{"the namesake alone is found", person("22222222", "Jean"), recent("20000001", "Martin", "Jean"), nil, 1},
+		// Jean Martin is only the translator here and the author is someone
+		// else, so nothing is adopted and no lookup is spent.
+		{"another person's book", person("11111111", "Jean"), recent("20000002", "Durand", "Paul"), nil, 0},
+		// More people match the name than one lookup reads: a namesake may
+		// be on the next page, so nothing is adopted.
+		{"more matches than one lookup reads", person("11111111", "Jean") + `<!--more-->`, recent("20000001", "Martin", "Jean"), nil, 1},
+	} {
+		var lookups atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query().Get("query")
+			if r.URL.Query().Get("startRecord") != "1" {
+				_, _ = w.Write([]byte(emptySRU))
+				return
+			}
+			switch {
+			case strings.Contains(q, "aut.recordid"):
+				_, _ = w.Write([]byte(wrap(person("11111111", "Jean"))))
+			case strings.Contains(q, "aut.accesspoint"):
+				lookups.Add(1)
+				body := wrap(tc.authorities)
+				if strings.Contains(tc.authorities, "<!--more-->") {
+					body = strings.Replace(body, "<numberOfRecords>9<", "<numberOfRecords>57<", 1)
+				}
+				_, _ = w.Write([]byte(body))
+			case strings.Contains(q, "bib.creationdate"):
+				_, _ = w.Write([]byte(wrap(tc.recent)))
+			default:
+				_, _ = w.Write([]byte(emptySRU))
+			}
+		}))
+		books, _, err := testClient(srv.URL).GetAuthorWorksSnapshot(context.Background(), "bnf:author:11111111")
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var got []string
+		for _, b := range books {
+			got = append(got, b.Title)
+		}
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("%s: books = %v, want %v", tc.name, got, tc.want)
+		}
+		if lookups.Load() != tc.lookups {
+			t.Errorf("%s: authority lookups = %d, want %d", tc.name, lookups.Load(), tc.lookups)
+		}
+	}
+}

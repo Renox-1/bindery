@@ -306,9 +306,10 @@ func TestGetAuthorWorksSnapshot(t *testing.T) {
 	}
 	sent := fs.sent()
 	// The fixture claims 704 records but the fake server's second page is
-	// empty, which ends the walk.
-	if len(sent) != 4 {
-		t.Errorf("requests = %v, want authority, two author2bib pages and the recent name query", sent)
+	// empty, which ends the walk. The recent record is adopted only after one
+	// lookup shows no namesake shares the heading.
+	if len(sent) != 5 || !strings.HasPrefix(sent[4], `aut.accesspoint all "Carroll Lewis"`) {
+		t.Errorf("requests = %v, want authority, two author2bib pages, the recent name query and the namesake check", sent)
 	}
 }
 
