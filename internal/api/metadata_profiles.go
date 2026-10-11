@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -58,8 +57,7 @@ func (h *MetadataProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *MetadataProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var p models.MetadataProfile
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &p) {
 		return
 	}
 	if p.Name == "" {
@@ -86,7 +84,11 @@ func (h *MetadataProfileHandler) Update(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	existing, err := h.repo.GetByID(r.Context(), id)
-	if err != nil || existing == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if existing == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "metadata profile not found"})
 		return
 	}
@@ -96,8 +98,7 @@ func (h *MetadataProfileHandler) Update(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var p models.MetadataProfile
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &p) {
 		return
 	}
 	p.ID = id
