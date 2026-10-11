@@ -191,6 +191,19 @@ providers send both spellings for one book and both must produce one key. That
 change bumped `indexer.CanonicalDedupKeyRev` to 2, and the startup backfill
 rewrites `books.dedup_key` once on the boot after the bump.
 
+The key also folds the library filing form (#3122): a lone article after the
+last comma moves back to the front, so `Trace of Death, A` and `A Trace of
+Death` share the key `a trace of death`. The article is kept, so the key stays
+lossless; it is not dropped the way Review duplicates drops it for detection.
+The article list and the recognition rule live in `textutil.SplitFilingForm`,
+used by both, so they cannot disagree. That change bumped
+`CanonicalDedupKeyRev` to 3. There is no SQL migration: SQLite cannot run the
+Go normalizer, `idx_books_author_dedup_key` is a plain index with no uniqueness
+constraint, and the startup backfill is the existing way to recompute a key.
+Rows that converge on one key stay separate rows. The importers see more than
+one match and route to review instead of binding, and Review duplicates reads
+titles, not this column, so the pair is listed there.
+
 ### Ranking: exact word beats prefix
 
 Matching answers "does this row match", not "how well". The tiers in
