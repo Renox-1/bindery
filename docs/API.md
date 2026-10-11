@@ -195,7 +195,9 @@ entirely.
 
 Any other provider failure on a relink, a relink candidate search, a book
 rebind, an audiobook enrich or an add book answers **502** with the fixed
-message `metadata provider unavailable`. The provider's own error text embeds
+message `metadata provider unavailable`, except while the provider is paused
+(a daily quota or a rejected token), which says so and when it ends. The
+provider's own error text embeds
 its request URL (and so an API key and the resolver address), so it goes to the
 Bindery log and not to the client.
 
@@ -413,7 +415,8 @@ POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr 
                                                   shortened "error" when Prowlarr fails
 
 GET    /api/v1/rootfolder                         list library roots
-POST   /api/v1/rootfolder                         add a new root (admin)
+POST   /api/v1/rootfolder                         add a new root (admin); 400 says whether the path is
+                                                  missing, unreadable or under a file
 DELETE /api/v1/rootfolder/{id}                    remove (admin)
 ```
 
@@ -577,7 +580,8 @@ POST   /api/v1/queue/grab                         submit a search result to the 
                                                   can take the release (the message names the protocol); 502
                                                   "failed to send the release to the download client" when the
                                                   client refused it or could not be reached (the cause is in
-                                                  the log and on the queue row); 500 for a storage fault.
+                                                  the log and on the queue row; a refused or timed out
+                                                  connection adds Bindery's own hint); 500 for a storage fault.
                                                   /queue/{id}/retry answers the same way
 POST   /api/v1/queue/{id}/retry-import           retry an importFailed/importBlocked item without re-downloading
 POST   /api/v1/queue/{id}/retry                   re-send a failed item's release to the download client (no re-search)
@@ -718,10 +722,11 @@ Both probes (`POST /api/v1/downloadclient/test` and
 `POST /api/v1/downloadclient/{id}/test`) answer `400` for a host or URL Bindery
 refuses to call, and `502` when the client was called and the probe failed. The
 `error` of a `502` is never the raw failure text. A refused or timed out
-connection gets Bindery's own hint (`could not reach the download client`
-followed by what to check) with no URL in it; anything else is the first line of
-what the client said, credentials redacted, at most 200 characters. The full
-text is in the Bindery log.
+connection names the client and the host and port you configured, then Bindery's
+own hint for it (`could not reach SABnzbd at 192.168.1.5:8080 (connection
+refused, check the port ...)`), with no URL in it; anything else is the first
+line of what the client said, credentials redacted, at most 200 characters. The
+full text is in the Bindery log.
 
 #### Diagnosing a download client
 
@@ -1231,7 +1236,7 @@ GET    /api/v1/auth/oidc/{provider}/callback      OIDC redirect target
 GET    /api/v1/auth/users                         list users (admin)
 POST   /api/v1/auth/users                         create (admin)
 DELETE /api/v1/auth/users/{id}                    delete (admin)
-PUT    /api/v1/auth/users/{id}/role               change role (admin), body {"role": "admin"|"user"|"requester"}
+PUT    /api/v1/auth/users/{id}/role               change role (admin), body {"role": "admin"|"user"|"requester"}; 404 for an unknown user
 PUT    /api/v1/auth/users/{id}/auto-approve       per-account request auto-approval (admin), body {"enabled": true|false}
 PUT    /api/v1/auth/users/{id}/reset-password     reset (admin)
 ```

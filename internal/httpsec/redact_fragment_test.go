@@ -27,7 +27,7 @@ func TestRedactSecretsFragmentCredential(t *testing.T) {
 func TestRedactURLErrorScrubsUserinfoQueryAndFragment(t *testing.T) {
 	ue := &url.Error{Op: "Get", URL: "https://bob:SEKRET123@host/x?apikey=SEKRET123#token=SEKRET123", Err: errors.New("boom")}
 	got := RedactURLError(ue)
-	if got != error(ue) {
+	if !errors.Is(got, ue) {
 		t.Fatal("RedactURLError must return the same error")
 	}
 	if strings.Contains(got.Error(), "SEKRET123") {

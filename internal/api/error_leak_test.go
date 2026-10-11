@@ -659,7 +659,8 @@ func TestUpstreamDetail(t *testing.T) {
 		{"redacted", "GET https://h/x?apikey=" + leakSecret + " failed", func(s string) bool { return !strings.Contains(s, leakSecret) }},
 		{"capped", long, func(s string) bool { return len(s) == upstreamDetailMax }},
 		{"rune boundary", multibyte, func(s string) bool { return len(s) <= upstreamDetailMax && strings.ToValidUTF8(s, "") == s }},
-		{"empty", "", func(s string) bool { return s == "" }},
+		{"empty", "", func(s string) bool { return s == upstreamDetailEmpty }},
+		{"leading blank line", "\r\n\r\nreal reason\nmore", func(s string) bool { return s == "real reason" }},
 	}
 	for _, c := range cases {
 		if got := upstreamDetail(c.in); !c.check(got) {

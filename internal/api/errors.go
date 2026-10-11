@@ -73,11 +73,12 @@ func redactFreeText(s string) string {
 // error pages or stack traces, and a first line is enough for an operator to
 // see what the service objected to.
 func upstreamDetail(msg string) string {
-	msg = redactFreeText(httpsec.RedactSecrets(msg))
+	// Trim first, so a body that opens with a blank line still yields its
+	// first line of text rather than nothing.
+	msg = strings.TrimSpace(redactFreeText(httpsec.RedactSecrets(msg)))
 	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
-		msg = msg[:i]
+		msg = strings.TrimSpace(msg[:i])
 	}
-	msg = strings.TrimSpace(msg)
 	if len(msg) > upstreamDetailMax {
 		// Cut on a rune boundary so a multi-byte character is never split.
 		cut := upstreamDetailMax
@@ -86,8 +87,15 @@ func upstreamDetail(msg string) string {
 		}
 		msg = msg[:cut]
 	}
+	if msg == "" {
+		return upstreamDetailEmpty
+	}
 	return msg
 }
+
+// upstreamDetailEmpty is what a caller sees when the other service sent no
+// text at all, so the UI never renders a blank reason.
+const upstreamDetailEmpty = "the service returned an error with no message"
 
 // writeUpstreamDetail is for connection-test style endpoints, where the
 // operator needs some of what the other service said. err is logged in full;
