@@ -322,3 +322,27 @@ func TestRejectedTokenCorruptRowAndFailedWrite(t *testing.T) {
 		t.Fatalf("retried hold not durable: %v", err)
 	}
 }
+
+// A token that is both over its daily quota and rejected reports the rejection:
+// waiting for the reset cannot help, so the answer must not promise one.
+func TestRejectedTokenOutranksDailyQuotaHold(t *testing.T) {
+	ctx := context.Background()
+	q, _ := dailyFixture(t)
+	if err := q.Check(ctx, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	q.mu.Lock()
+	q.holds[q.tokenKey("tok")] = q.now().Add(2 * time.Hour)
+	q.version++
+	q.mu.Unlock()
+	var daily *metadata.DailyQuotaError
+	if err := q.Check(ctx, "tok"); !errors.As(err, &daily) {
+		t.Fatalf("daily hold alone: %v", err)
+	}
+	_ = q.rejectToken(ctx, "tok", errors.New("token rejected (HTTP 401)"))
+	var rejected *metadata.TokenRejectedError
+	err := q.Check(ctx, "tok")
+	if !errors.As(err, &rejected) || errors.As(err, &daily) {
+		t.Fatalf("both holds: %v", err)
+	}
+}
