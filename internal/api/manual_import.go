@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -232,7 +231,11 @@ func (h *ManualImportHandler) validateImport(ctx context.Context, rawPath string
 		return "", nil, http.StatusBadRequest, "path is not a recognised book file"
 	}
 	book, err := h.books.GetByID(ctx, bookID)
-	if err != nil || book == nil {
+	if err != nil {
+		slog.Error("manual import: book lookup failed", "book", bookID, "error", err)
+		return "", nil, http.StatusInternalServerError, "internal server error"
+	}
+	if book == nil {
 		return "", nil, http.StatusBadRequest, "book not found"
 	}
 	return path, book, 0, ""
@@ -266,8 +269,7 @@ func (h *ManualImportHandler) createManualDownload(ctx context.Context, book *mo
 // kicks off the import asynchronously. Returns 202 with the new record.
 func (h *ManualImportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	var req manualImportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	dl, path, status, msg := h.prepareImport(r.Context(), req.Path, req.BookID, req.Format)
@@ -317,8 +319,7 @@ type reassignLinkResponse struct {
 // the async import.
 func (h *ManualImportHandler) Reassign(w http.ResponseWriter, r *http.Request) {
 	var req reassignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Path) == "" {
@@ -903,8 +904,7 @@ const (
 // with bounded concurrency. Returns 202 with the per-item validation results.
 func (h *ManualImportHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 	var items []BatchImportItem
-	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &items) {
 		return
 	}
 	if len(items) == 0 {
@@ -1088,8 +1088,7 @@ type matchDownloadRequest struct {
 // re-imports against the now-assigned book on its next poll.
 func (h *ManualImportHandler) MatchDownload(w http.ResponseWriter, r *http.Request) {
 	var req matchDownloadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.DownloadID <= 0 || req.BookID <= 0 {
@@ -1115,7 +1114,11 @@ func (h *ManualImportHandler) MatchDownload(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	book, err := h.books.GetByID(ctx, req.BookID)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book not found"})
 		return
 	}
