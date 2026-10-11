@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -435,6 +436,31 @@ func TestGarbageBodyIsAnError(t *testing.T) {
 	}
 }
 
+// A body of nested elements is refused once it passes maxXMLDepth, before
+// the decoder's element stack grows: a 4 MiB nest of <a> cost about 260 MiB
+// of allocation without the limit.
+func TestDeeplyNestedBodyIsRefused(t *testing.T) {
+	body := "<searchRetrieveResponse>" + strings.Repeat("<a>", (maxResponseBytes-64)/3)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	var out sruResponse
+	err := decodeXML(strings.NewReader(body), &out)
+	runtime.ReadMemStats(&after)
+	if err == nil || !strings.Contains(err.Error(), "nest") {
+		t.Errorf("err = %v, want the nesting refused", err)
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 32<<20 {
+		t.Errorf("decoding allocated %d MiB, want the nest refused before it costs more than 32 MiB", alloc>>20)
+	}
+	// Real responses nest about eight deep and decode as before.
+	if err := decodeXML(strings.NewReader(string(fixture(t, "search_alice.xml"))), &out); err != nil || len(out.Records) == 0 {
+		t.Errorf("real response: %d records, err = %v", len(out.Records), err)
+	}
+}
+
+// encoding/xml skips a leading byte order mark itself (BnF's Explain
+// response starts with one), so decodeXML has no code of its own for it.
 func TestByteOrderMarkIsSkipped(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(append([]byte{0xEF, 0xBB, 0xBF}, fixture(t, "isbn_miroir.xml")...))

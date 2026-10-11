@@ -203,6 +203,27 @@ func TestGroupWorks_TranslationsOfOneOriginalAreOneWork(t *testing.T) {
 	}
 }
 
+// Accents, ligatures and case are cataloguing variation, not different
+// works: older converted records often drop them.
+func TestGroupWorks_TitleKeyFoldsAccentsAndLigatures(t *testing.T) {
+	books := groupWorks([]edition{
+		edWith("cb10000001b", "Les Misérables", "", "fre", "19900101", carroll),
+		edWith("cb10000002c", "les miserables", "", "fre", "19950101", carroll),
+		edWith("cb10000003d", "Œuvres complètes", "", "fre", "19900101", carroll),
+		edWith("cb10000004f", "Oeuvres completes", "", "fre", "19950101", carroll),
+		edWith("cb10000005g", "Les Misérables", "", "fre", "19900101", bue),
+	}, "")
+	if len(books) != 3 {
+		for _, b := range books {
+			t.Logf("work %s %q with %d editions", b.ForeignID, b.Title, len(b.Editions))
+		}
+		t.Fatalf("works = %d, want 3: one per title per author", len(books))
+	}
+	if len(books[0].Editions) != 2 || len(books[1].Editions) != 2 {
+		t.Errorf("editions = %d, %d, want the spelling variants grouped", len(books[0].Editions), len(books[1].Editions))
+	}
+}
+
 // The French edition represents the work even when an edition in another
 // language was entered on file earlier and comes first in the results.
 func TestGroupWorks_FrenchEditionRepresentsTheWork(t *testing.T) {

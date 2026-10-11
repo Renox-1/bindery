@@ -306,11 +306,14 @@ func authorKey(c *credit) string {
 }
 
 // titleKey is the grouping key for a title. Spaces are dropped so a
-// cataloguing slip that splits a word stays with its work, and a typographic
-// apostrophe is the same as a straight one ("L’outsider", "L'outsider").
+// cataloguing slip that splits a word stays with its work, accents,
+// ligatures and case are folded with the search key's fold (older converted
+// records drop them: "Les Misérables" and "les miserables", "Œuvres" and
+// "Oeuvres" are one work), and a typographic apostrophe is the same as a
+// straight one ("L’outsider", "L'outsider").
 func titleKey(title string) string {
 	title = strings.ReplaceAll(title, "\u2019", "'")
-	return strings.ReplaceAll(indexer.CanonicalDedupKey(title), " ", "")
+	return strings.ReplaceAll(textutil.FoldForSearch(indexer.CanonicalDedupKey(title)), " ", "")
 }
 
 // unionFind joins title keys that name the same work.

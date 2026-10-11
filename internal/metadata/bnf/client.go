@@ -26,7 +26,6 @@
 package bnf
 
 import (
-	"bufio"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -81,6 +80,10 @@ const (
 	// off here fails to decode and is reported as an error, never read as a
 	// short result.
 	maxResponseBytes = 4 << 20
+	// maxXMLDepth bounds element nesting in a response. A real SRU response
+	// nests about eight deep; without a bound, a 4 MiB body of nested
+	// elements grows the decoder's element stack to about 260 MiB.
+	maxXMLDepth = 64
 	// requestTimeout bounds one request, pacing wait included.
 	requestTimeout = 20 * time.Second
 )
@@ -615,14 +618,36 @@ func classify(err error) error {
 	}
 }
 
-// decodeXML decodes r, skipping a UTF-8 byte order mark (BnF's Explain
-// response starts with one).
+// errTooDeep reports a response nested deeper than maxXMLDepth.
+var errTooDeep = errors.New("bnf: response elements nest deeper than any SRU response")
+
+// decodeXML decodes r with element nesting bounded by maxXMLDepth, so a
+// hostile or broken body is refused before the decoder's element stack grows
+// with it. (encoding/xml skips a leading byte order mark itself.)
 func decodeXML(r io.Reader, out any) error {
-	br := bufio.NewReader(r)
-	if b, err := br.Peek(3); err == nil && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
-		_, _ = br.Discard(3)
+	return xml.NewTokenDecoder(&depthLimiter{d: xml.NewDecoder(r), max: maxXMLDepth}).Decode(out)
+}
+
+// depthLimiter passes tokens through and fails once elements nest deeper
+// than max.
+type depthLimiter struct {
+	d     *xml.Decoder
+	depth int
+	max   int
+}
+
+func (l *depthLimiter) Token() (xml.Token, error) {
+	tok, err := l.d.Token()
+	switch tok.(type) {
+	case xml.StartElement:
+		l.depth++
+		if l.depth > l.max {
+			return nil, errTooDeep
+		}
+	case xml.EndElement:
+		l.depth--
 	}
-	return xml.NewDecoder(br).Decode(out)
+	return tok, err
 }
 
 func parseRecords(pages ...*sruResponse) []edition {
