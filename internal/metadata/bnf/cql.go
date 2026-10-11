@@ -3,6 +3,8 @@ package bnf
 import (
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // maxTermRunes bounds a search term. A title longer than this is cut, which
@@ -23,7 +25,12 @@ const maxTermRunes = 200
 // keyword such as "or" inside the quotes is just a word. The apostrophe of
 // an elided article ("L'outsider") is kept: it is not special in CQL and BnF
 // matches it.
+//
+// The text is composed (NFC) first: a title typed or pasted on macOS can
+// arrive decomposed, "e" plus a combining accent, while BnF's records are
+// composed, and the rune cap below should count letters, not marks.
 func cqlTerm(s string) string {
+	s = norm.NFC.String(s)
 	var b strings.Builder
 	n := 0
 	for _, r := range s {

@@ -296,6 +296,17 @@ func TestCQLTerm(t *testing.T) {
 			t.Errorf("cqlTerm(%q) = %q, want %q", in, got, want)
 		}
 	}
+	// Decomposed input (what macOS hands back for a typed or pasted title)
+	// becomes the composed query, the form BnF's records use.
+	for in, want := range map[string]string{
+		"Les Misérables":     "\"Les Misérables\"",
+		"Œuvres complètes":   "\"Œuvres complètes\"",
+		"Céline L'étranger": "\"Céline L'étranger\"",
+	} {
+		if got := cqlTerm(in); got != want {
+			t.Errorf("cqlTerm(%q) = %q (%d bytes), want the NFC %q (%d bytes)", in, got, len(got), want, len(want))
+		}
+	}
 	long := strings.Repeat("a", 500)
 	if got := cqlTerm(long); len(got) != maxTermRunes+2 {
 		t.Errorf("long term length = %d, want capped at %d", len(got), maxTermRunes+2)
