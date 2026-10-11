@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { api, BINDERY_BASE, Book, HistoryEvent, MediaType, SearchResult, SearchDebug, Series } from '../api/client'
+import { api, BINDERY_BASE, Book, BookSeriesExclusion, HistoryEvent, MediaType, SearchResult, SearchDebug, Series } from '../api/client'
 import SearchDebugPanel from '../components/SearchDebugPanel'
 import CoverPlaceholder from '../components/CoverPlaceholder'
+import BookRating from '../components/BookRating'
 import MarkdownDescription from '../components/MarkdownDescription'
 import MoreMenu from '../components/MoreMenu'
 import Section from '../components/Section'
 import Switch from '../components/Switch'
 import { btn, btnSize, dangerLink } from '../components/buttons'
+import { useIsAdmin } from '../auth/AuthContext'
 import MediaBadge from '../components/MediaBadge'
 import CalibreDeliveryChip from '../components/CalibreDeliveryChip'
 import { bookStatusBadge } from '../components/bookStatus'
@@ -28,6 +30,7 @@ import { formatBytes } from '../util/format'
 import MetadataLinksMenu from '../components/MetadataLinksMenu'
 import { usePolling } from '../components/usePolling'
 import { languageName } from '../util/language'
+import CoverImage from '../components/CoverImage'
 
 function formatDuration(seconds?: number): string {
   if (!seconds || seconds <= 0) return ''
@@ -328,6 +331,9 @@ function BookDetailPageInner() {
   const [seriesBusy, setSeriesBusy] = useState(false)
   const [removeSeries, setRemoveSeries] = useState<{ id: number; title: string } | null>(null)
   const [seriesNonce, setSeriesNonce] = useState(0)
+  // Series the user took this book out of (#2554). Refreshes leave it out
+  // of these; Restore puts it back where it was.
+  const [keptOut, setKeptOut] = useState<BookSeriesExclusion[]>([])
 
   useEffect(() => {
     if (book?.title) {
@@ -395,8 +401,32 @@ function BookDetailPageInner() {
         setSeries(mine)
       })
       .catch(() => { /* no series row */ })
+    api.getBookSeriesExclusions(id)
+      .then(list => { if (!cancelled) setKeptOut(list) })
+      .catch(() => { /* nothing to show */ })
     return () => { cancelled = true }
   }, [book?.authorId, book?.id, seriesNonce])
+
+  // Puts the book back in a series it was taken out of, at the position it
+  // had, as its primary series only when it has none. Linking by hand clears
+  // the exclusion on the server.
+  const restoreSeries = async (e: BookSeriesExclusion) => {
+    if (!book) return
+    setSeriesBusy(true)
+    setError(null)
+    try {
+      await api.linkBookToSeries(e.seriesId, { bookId: book.id, positionInSeries: e.position, primarySeries: !series.some(s => s.primary) })
+      setSeriesNonce(n => n + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('bookDetail.series.restoreFailed'))
+    } finally {
+      setSeriesBusy(false)
+    }
+  }
+  // Series changes are admin only (#468): other users see the book's series
+  // without the controls, and nothing to restore.
+  const isAdmin = useIsAdmin()
+  const restorable = isAdmin ? keptOut.filter(e => e.seriesId > 0) : []
 
   // #2525: the renamer reads one series per book. When a book sits in both its
   // real series and an umbrella "Universe" one, these are how the user says
@@ -868,11 +898,11 @@ function BookDetailPageInner() {
       {/* ===== Header: cover + metadata ===== */}
       <div className="flex flex-col sm:flex-row gap-6">
         <div className="w-32 flex-shrink-0">
-          {book.imageUrl ? (
-            <img src={book.imageUrl} alt={book.title} className="w-full rounded-lg" />
-          ) : (
-            <CoverPlaceholder id={book.id} title={book.title} className="aspect-[2/3] rounded-lg" />
-          )}
+          <CoverImage src={book.imageUrl} alt={book.title} className="w-full rounded-lg"
+            fallback={
+              <CoverPlaceholder id={book.id} title={book.title} className="aspect-[2/3] rounded-lg" />
+            }
+          />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
@@ -945,6 +975,12 @@ function BookDetailPageInner() {
                 {t('bookDetail.languageUnknown')}
               </span>
             )}
+            {book.averageRating && book.averageRating > 0 ? (
+              <>
+                <span aria-hidden className="text-slate-400 dark:text-zinc-600">·</span>
+                <BookRating book={book} withCount className="text-slate-600 dark:text-zinc-400" />
+              </>
+            ) : null}
             {book.narrator && (
               <>
                 <span aria-hidden className="text-slate-400 dark:text-zinc-600">·</span>
@@ -1059,8 +1095,9 @@ function BookDetailPageInner() {
           Only when a book is in more than one series. With a single membership
           there is nothing to choose and nothing to correct, so the meta row
           above already says everything. */}
-      {series.length > 1 && (
+      {(series.length > 1 || restorable.length > 0) && (
         <Section title={t('bookDetail.series.heading')}>
+          {series.length > 1 && (<>
           <p className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.series.explainer')}</p>
           <ul className="mt-3 space-y-2">
             {series.map(s => (
@@ -1076,7 +1113,7 @@ function BookDetailPageInner() {
                 </span>
                 {s.primary ? (
                   <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.series.namesFiles')}</span>
-                ) : (
+                ) : isAdmin && (
                   <button
                     type="button"
                     className={`${btn.ghost} ${btnSize.sm}`}
@@ -1086,17 +1123,39 @@ function BookDetailPageInner() {
                     {t('bookDetail.series.useForNaming')}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className={`${dangerLink} text-xs disabled:opacity-50`}
-                  disabled={seriesBusy}
-                  onClick={() => setRemoveSeries({ id: s.id, title: s.title })}
-                >
-                  {t('bookDetail.series.remove')}
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className={`${dangerLink} text-xs disabled:opacity-50`}
+                    disabled={seriesBusy}
+                    onClick={() => setRemoveSeries({ id: s.id, title: s.title })}
+                  >
+                    {t('bookDetail.series.remove')}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
+          </>)}
+          {restorable.length > 0 && (
+            <div className={series.length > 1 ? 'mt-4' : ''}>
+              <p className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.series.keptOutExplainer')}</p>
+              <ul className="mt-2 space-y-2" aria-label={t('bookDetail.series.keptOutHeading')}>
+                {restorable.map(e => (
+                  <li key={e.seriesForeignId} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                    <span className="text-slate-500 dark:text-zinc-400 line-through decoration-slate-400">
+                      {e.position
+                        ? t('bookDetail.seriesPosition', { series: e.seriesTitle, position: e.position, defaultValue: '{{series}} #{{position}}' })
+                        : e.seriesTitle}
+                    </span>
+                    <button type="button" className={`touch-target ${btn.ghost} ${btnSize.sm}`} disabled={seriesBusy} onClick={() => restoreSeries(e)}>
+                      {t('bookDetail.series.restore')}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Section>
       )}
 
@@ -1160,7 +1219,7 @@ function BookDetailPageInner() {
                             paths: group.rows.map(r => r.path),
                           })}
                           disabled={deletingFile || deregistering || deletingBook}
-                          className={`${btn.danger} ${btnSize.md}`}
+                          className={`${btn.danger} ${btnSize.sm}`}
                         >
                           <span aria-hidden>🗑 </span>
                           {group.rows.length > 1 ? t('bookDetail.deleteFiles') : t('bookDetail.deleteFile')}
@@ -1527,6 +1586,8 @@ function BookDetailPageInner() {
           book={book}
           onClose={() => setShowEdit(false)}
           onSaved={updated => setBook(updated)}
+          onSeriesSaved={() => setSeriesNonce(n => n + 1)}
+          seriesExclusions={keptOut.length}
         />
       )}
       {showRebind && (

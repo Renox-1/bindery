@@ -18,8 +18,10 @@ import { isAutoGrabRefusal } from '../util/autoGrabRefusal'
 import { useView } from '../components/useView'
 import SetupChecklist from '../components/SetupChecklist'
 import { btn, btnSize } from '../components/buttons'
+import { useIsAdmin } from '../auth/AuthContext'
 import Switch from '../components/Switch'
 import { ModalPanel } from '../components/useModal'
+import CoverImage from '../components/CoverImage'
 
 // 'az' | 'za' sort by name and back the existing toolbar buttons; the rest are
 // the column-header sorts (#1349), whitelisted server-side by authorSortOrder.
@@ -41,6 +43,7 @@ const LIST_DEFAULTS = { q: '', sort: 'az' }
 
 export default function AuthorsPage() {
   const { t } = useTranslation()
+  const isAdmin = useIsAdmin()
   const { confirm, confirmDialog } = useConfirmDialog()
   const navigate = useNavigate()
   const [authors, setAuthors] = useState<Author[]>([])
@@ -449,12 +452,15 @@ export default function AuthorsPage() {
           >
             {t('addToLibrary.addBook')}
           </button>
-          <button
-            onClick={() => setShowAddSeries(true)}
-            className="px-4 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded-md text-sm font-medium transition-colors"
-          >
-            {t('series.addSeries')}
-          </button>
+          {/* Creating a series is admin only (#468). */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowAddSeries(true)}
+              className="px-4 py-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded-md text-sm font-medium transition-colors"
+            >
+              {t('series.addSeries')}
+            </button>
+          )}
           {/* Below `sm` the five buttons wrap and the primary action used to
               land on the second row, under Refresh all metadata, Merge and Add
               Book. `order-first` pulls it to the front of the wrapped group on a
@@ -603,17 +609,24 @@ export default function AuthorsPage() {
                     </td>
                     <td className="px-3 py-2">
                       <Link to={`/author/${author.id}`} state={authorNavState(i)} className="flex items-center gap-2">
-                        {author.imageUrl ? (
-                          <img loading="lazy" decoding="async" src={author.imageUrl} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
-                        ) : (
-                          <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center text-xs font-bold text-slate-500 dark:text-zinc-600 flex-shrink-0">
-                            {author.authorName.charAt(0)}
-                          </div>
-                        )}
+                        <CoverImage loading="lazy" decoding="async" src={author.imageUrl} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0"
+                          fallback={
+                            <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center text-xs font-bold text-slate-500 dark:text-zinc-600 flex-shrink-0">
+                              {author.authorName.charAt(0)}
+                            </div>
+                          }
+                        />
                         <span className="text-slate-800 dark:text-zinc-200 truncate hover:text-emerald-500">{author.authorName}</span>
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap">{author.statistics?.bookCount ?? '—'}</td>
+                    <td
+                      className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap tabular-nums"
+                      title={author.statistics && author.statistics.bookCount > 0
+                        ? `${t('authors.booksInLibrary', '{{have}} of {{total}} in library', { have: author.statistics.availableBookCount, total: author.statistics.bookCount })}. ${t('authors.booksInLibraryHint', 'A book counts once at least one of its files is in your library.')}`
+                        : undefined}
+                    >
+                      {author.statistics && author.statistics.bookCount > 0 ? `${author.statistics.availableBookCount} / ${author.statistics.bookCount}` : '—'}
+                    </td>
                     {anyRating && (
                       <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap">
                         {author.averageRating > 0 ? `★ ${author.averageRating.toFixed(2)}` : '—'}
@@ -659,18 +672,23 @@ export default function AuthorsPage() {
                   title={`Select ${author.authorName}`}
                 />
                 <Link to={`/author/${author.id}`} state={authorNavState(i)} className="flex gap-3 p-4 hover:bg-slate-200/40 dark:hover:bg-zinc-800/40 transition-colors">
-                  {author.imageUrl ? (
-                    <img loading="lazy" decoding="async" src={author.imageUrl} alt={author.authorName} className="w-16 h-16 rounded-full object-cover flex-shrink-0" />
-                  ) : (
-                    <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0 text-xl font-bold text-slate-500 dark:text-zinc-600">
-                      {author.authorName.charAt(0)}
-                    </div>
-                  )}
+                  <CoverImage loading="lazy" decoding="async" src={author.imageUrl} alt={author.authorName} className="w-16 h-16 rounded-full object-cover flex-shrink-0"
+                    fallback={
+                      <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center flex-shrink-0 text-xl font-bold text-slate-500 dark:text-zinc-600">
+                        {author.authorName.charAt(0)}
+                      </div>
+                    }
+                  />
                   <div className="min-w-0">
                     <h3 className="font-semibold truncate">{author.authorName}</h3>
                     <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1 line-clamp-2">
                       {author.description || t('authors.noDescription')}
                     </p>
+                    {author.statistics && author.statistics.bookCount > 0 && (
+                      <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1 tabular-nums">
+                        {t('authors.booksInLibrary', '{{have}} of {{total}} in library', { have: author.statistics.availableBookCount, total: author.statistics.bookCount })}
+                      </p>
+                    )}
                   </div>
                 </Link>
               </div>

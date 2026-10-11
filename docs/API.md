@@ -117,7 +117,9 @@ The same response carries `"syncInProgress": true` while a catalogue sync for
 the author is running in this process, and omits it otherwise. The author page
 polls it after **Refresh metadata** to show the result once the sync is done,
 and `POST /api/v1/author/{id}/refresh` answers **409 Conflict** while it is set
-instead of starting a second sync (#2601).
+instead of starting a second sync (#2601). It is also set from the moment
+`POST /api/v1/author` answers, for the catalogue sync the add starts, so a page
+opened straight after the add sees it (#3058).
 
 `POST /api/v1/author` accepts an optional `monitorNewItems` (#2541), the same
 field `PUT /api/v1/author/{id}` takes: `all` (the default) lets a refresh add
@@ -283,13 +285,14 @@ fingerprint and the next request rescans.
 ### Books
 
 ```
-GET    /api/v1/book?status=wanted                 filter by status (wanted, imported, skipped)
+GET    /api/v1/book?status=wanted                 filter by status (wanted, imported, skipped); `imported` is the In Library view and also lists a `wanted` book that already has at least one tracked file (of that format when `mediaType` is set), so a partly owned dual format book appears under both
 POST   /api/v1/book/bulk                          bulk monitor / status flip / exclude (`"expectNoFiles": true` skips books that have files)
 GET    /api/v1/book/{id}                          book detail (with editions, history, formats; `importInFlight: true` while a download for it is still on its way into the library)
 PUT    /api/v1/book/{id}                          update monitor / status / metadata
 DELETE /api/v1/book/{id}                          remove from library
 DELETE /api/v1/book/{id}/file                     delete imported file(s) on disk (`?format=ebook|audiobook` scopes to one format; `?path=…` deregisters one tracked path WITHOUT deleting anything on disk)
 PUT    /api/v1/book/{id}/exclude                  exclude from future searches
+GET    /api/v1/book/{id}/series-exclusions        the series the book was taken out of: [{seriesForeignId, seriesId, seriesTitle, position}]; seriesId is 0 when nothing resolves the id any more
 POST   /api/v1/book/{id}/rebind                   re-link to a different metadata record
 POST   /api/v1/book/{id}/enrich-audiobook         pull narrator/duration/cover from Audnex
 POST   /api/v1/book/{id}/search                   manual indexer search
@@ -306,7 +309,16 @@ POST   /api/v1/series/{id}/fill                   add the series' missing books 
 POST   /api/v1/series/{id}/split-parts/unmonitor  unmonitor the split edition parts of books already in the series, listed as splitEditionPartBookIds on the series (admin); answers {unmonitored}
 PATCH  /api/v1/series/{id}                        monitor / unmonitor (admin)
 POST   /api/v1/series/{id}/merge                  merge other series into this one: {"sourceIds":[..],"title":"optional rename","dryRun":true} previews (admin)
+POST   /api/v1/series/{id}/books                  add a book or update its position: {"bookId":1,"positionInSeries":"2","primarySeries":true}; positionInSeries is optional (admin)
+DELETE /api/v1/series/{id}/books/{bookId}         take a book out of the series, and keep it out on refresh (admin)
 ```
+
+Taking a book out of a series is remembered (#2554): a refresh that still
+reports the book in that series, under its own provider id or one merged into
+it, leaves it out. Adding the book back with `POST /series/{id}/books` forgets
+that, and so does an admin unlocking all of the book's fields (`PUT /book/{id}`
+with `"lockedFields": []`; another user's unlock leaves the book's series alone). Adding a book as primary makes it the book's only
+primary series. `GET /book/{id}/series-exclusions` lists what was taken out.
 
 `GET /series` returns the bare array it always has. Pagination is opt-in
 (#2345): pass `limit` and/or `offset` and you get an `{items, total, limit,
@@ -755,7 +767,7 @@ POST   /api/v1/backup                             snapshot the SQLite database (
 GET    /api/v1/backup                             list stored backups (admin)
 DELETE /api/v1/backup/{filename}                  delete one backup (admin)
 POST   /api/v1/backup/{filename}/restore          stage a backup for the next restart (admin, X-Confirm-Restore: true)
-GET    /api/v1/system/status                      version, commit, build date, newest published release, image cache size, Hardcover feature state
+GET    /api/v1/system/status                      version, commit, build date, newest published release, image cache size, Hardcover feature state; `hardcoverPausedUntil` while the daily quota holds, `hardcoverTokenRejected` while Hardcover has refused the saved token
 POST   /api/v1/library/scan                       start a library scan in the background (202; {"queued": true} when one is already running)
 GET    /api/v1/library/duplicate-candidates      read-only duplicate title groups across every author, paginated (#2999)
 GET    /api/v1/library/scan/status                summary of the last library scan, paths included (admin)

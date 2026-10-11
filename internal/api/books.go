@@ -15,6 +15,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/auth"
 	"github.com/vavallee/bindery/internal/bookhydrate"
+	"github.com/vavallee/bindery/internal/covers"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/importer"
 	"github.com/vavallee/bindery/internal/indexer"
@@ -207,7 +208,7 @@ func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 		}
 		if updated {
 			cleanBookDescription(book)
-			writeJSON(w, http.StatusOK, book)
+			writeBook(w, http.StatusOK, book)
 			return
 		}
 		if attempt > 0 {
@@ -406,12 +407,11 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	proxyBookImages(book)
 	cleanBookDescription(book)
 	h.attachBookFiles(r.Context(), book)
 	h.attachBookIdentifiers(r.Context(), book)
 	h.attachImportInFlight(r.Context(), book)
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 // attachImportInFlight marks a book whose download is still on its way into
@@ -595,6 +595,16 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	// Unlocking every field hands the book back to metadata refresh, and that
+	// includes its series: forget the series the user took it out of (#2554).
+	// Series changes are admin only, so another user's unlock leaves them be.
+	if req.LockedFields != nil && len(book.LockedFields) == 0 && h.series != nil &&
+		auth.UserRoleFromContext(r.Context()) == auth.RoleAdmin {
+		if err := h.series.ClearBookSeriesExclusions(r.Context(), book.ID); err != nil {
+			writeServerError(w, r, err)
+			return
+		}
+	}
 
 	// Fire an immediate indexer search when this write leaves the book wanted
 	// and monitored and it was not both before (e.g. "Delete file" flips
@@ -626,7 +636,7 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 func (h *BookHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -804,7 +814,7 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 // deleteTrackedBookFile removes exactly one tracked book_files row and its
@@ -869,7 +879,7 @@ func (h *BookHandler) deleteTrackedBookFile(w http.ResponseWriter, r *http.Reque
 			})
 		}
 	}
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 // deregisterBookFile removes ONE book_files row by its tracked path and does
@@ -946,7 +956,7 @@ func (h *BookHandler) deregisterBookFile(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 // removeBookPathScoped deletes a file or directory at p. Audiobooks are stored
@@ -1156,6 +1166,9 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range books {
 		cleanBookDescription(&books[i])
+		// Through the proxy like every other book list: a stored cover
+		// (bindery-cover:) does not load any other way (#3146).
+		proxyBookImages(&books[i])
 	}
 	h.markUnmonitoredAuthors(r.Context(), books)
 	writeJSON(w, http.StatusOK, books)
@@ -1381,8 +1394,7 @@ func (h *BookHandler) Rebind(w http.ResponseWriter, r *http.Request) {
 
 	h.attachBookFiles(r.Context(), book)
 	cleanBookDescription(book)
-	proxyBookImages(book)
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
@@ -1399,7 +1411,7 @@ func (h *BookHandler) ToggleExcluded(w http.ResponseWriter, r *http.Request) {
 	}
 	book.Excluded = newVal
 	cleanBookDescription(book)
-	writeJSON(w, http.StatusOK, book)
+	writeBook(w, http.StatusOK, book)
 }
 
 // preserveBookStateForMetadataMap and bookMapAuthorMatches below are retained:
@@ -1432,7 +1444,11 @@ func preserveBookStateForMetadataMap(book *models.Book, target *models.Book) {
 	book.SortTitle = firstNonEmpty(target.SortTitle, target.Title)
 	book.OriginalTitle = target.OriginalTitle
 	book.Description = target.Description
-	book.ImageURL = target.ImageURL
+	// The new record's cover replaces the old one, except that a cover read
+	// from the user's own file survives a record that has none.
+	if target.ImageURL != "" || !covers.IsRef(book.ImageURL) {
+		book.ImageURL = target.ImageURL
+	}
 	book.ReleaseDate = target.ReleaseDate
 	book.Genres = target.Genres
 	if book.Genres == nil {

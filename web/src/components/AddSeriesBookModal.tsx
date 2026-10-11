@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { api, Author, Book, Series } from '../api/client'
 import { foldedIncludes } from '../util/foldForSearch'
 import { useModal } from './useModal'
+import CoverImage from './CoverImage'
 
 interface Props {
   series: Series
@@ -67,11 +68,9 @@ export default function AddSeriesBookModal({ series, onClose, onLinked }: Props)
       setError('Select a book')
       return
     }
+    // A position is optional, as on the server: unnumbered series and
+    // omnibus volumes have none.
     const trimmedPosition = position.trim()
-    if (!trimmedPosition) {
-      setError('Position is required')
-      return
-    }
     setSaving(true)
     setError(null)
     try {
@@ -143,11 +142,11 @@ export default function AddSeriesBookModal({ series, onClose, onLinked }: Props)
                       onChange={e => setBookId(e.target.value)}
                       className="text-emerald-500 focus:ring-emerald-500"
                     />
-                    {book.imageUrl ? (
-                      <img loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-8 h-10 object-cover rounded flex-shrink-0" />
-                    ) : (
-                      <div className="w-8 h-10 bg-slate-300 dark:bg-zinc-700 rounded flex-shrink-0" />
-                    )}
+                    <CoverImage loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-8 h-10 object-cover rounded flex-shrink-0"
+                      fallback={
+                        <div className="w-8 h-10 bg-slate-300 dark:bg-zinc-700 rounded flex-shrink-0" />
+                      }
+                    />
                     <span className="min-w-0">
                       <span className="block text-sm font-medium truncate">{book.title}</span>
                       {authorName && <span className="block text-xs text-slate-600 dark:text-zinc-500 truncate">{authorName}</span>}
@@ -160,12 +159,11 @@ export default function AddSeriesBookModal({ series, onClose, onLinked }: Props)
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block text-sm">
-              <span className="block font-medium text-slate-700 dark:text-zinc-300 mb-1">Position</span>
+              <span className="block font-medium text-slate-700 dark:text-zinc-300 mb-1">Position (optional)</span>
               <input
                 type="text"
                 value={position}
                 onChange={e => setPosition(e.target.value)}
-                placeholder="1"
                 className="w-full bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
               />
             </label>
@@ -193,7 +191,7 @@ export default function AddSeriesBookModal({ series, onClose, onLinked }: Props)
           </button>
           <button
             type="submit"
-            disabled={saving || !bookId || !position.trim()}
+            disabled={saving || !bookId}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-md text-sm font-medium"
           >
             {saving ? 'Adding...' : 'Add'}

@@ -488,9 +488,8 @@ func (h *AuthorHandler) Get(w http.ResponseWriter, r *http.Request) {
 	// Refresh so it can show the result instead of the state before it (#2601).
 	author.SyncInProgress = h.runningSyncs.running(id)
 
-	proxyAuthorImages(author)
 	cleanAuthorDescription(author)
-	writeJSON(w, http.StatusOK, author)
+	writeAuthor(w, http.StatusOK, author)
 }
 
 // ListSeries returns the series belonging to the author — i.e. the series
@@ -514,6 +513,7 @@ func (h *AuthorHandler) ListSeries(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	proxySeriesImages(series)
 	writeJSON(w, http.StatusOK, series)
 }
 
@@ -559,10 +559,10 @@ func (h *AuthorHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !res.Created {
-		writeJSON(w, http.StatusOK, res.Author)
+		writeAuthor(w, http.StatusOK, res.Author)
 		return
 	}
-	writeJSON(w, http.StatusCreated, res.Author)
+	writeAuthor(w, http.StatusCreated, res.Author)
 }
 
 func cleanAuthorDescription(author *models.Author) {
@@ -837,7 +837,7 @@ func (h *AuthorHandler) writeCanonicalAuthorConflict(w http.ResponseWriter, cano
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error":             message,
 		"canonicalAuthorId": canonical.ID,
-		"canonicalAuthor":   canonical,
+		"canonicalAuthor":   proxiedAuthor(canonical),
 	})
 }
 
@@ -848,7 +848,7 @@ func (h *AuthorHandler) writeExistingBookConflict(w http.ResponseWriter, existin
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error":          "book already in your library; change its format or monitoring from the book page",
 		"existingBookId": existing.ID,
-		"existingBook":   existing,
+		"existingBook":   proxiedBook(existing),
 	})
 }
 
@@ -1117,7 +1117,7 @@ func (h *AuthorHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, author)
+	writeAuthor(w, http.StatusOK, author)
 }
 
 func applyMonitorModeToExistingBooks(ctx context.Context, booksRepo *db.BookRepo, authorsRepo *db.AuthorRepo, seriesRepo *db.SeriesRepo, author *models.Author) error {
@@ -1299,9 +1299,8 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxyAuthorImages(author)
 	cleanAuthorDescription(author)
-	writeJSON(w, http.StatusOK, author)
+	writeAuthor(w, http.StatusOK, author)
 }
 
 func (h *AuthorHandler) RelinkCandidates(w http.ResponseWriter, r *http.Request) {
@@ -1760,7 +1759,9 @@ func (h *AuthorHandler) authorAwaitsFirstCatalogue(ctx context.Context, author *
 // The outcome is logged by runCatalogueSync; callers that need it (scheduled
 // discovery, #2236) call runCatalogueSync directly.
 func (h *AuthorHandler) fetchAuthorBooks(ctx context.Context, author *models.Author, opts catalogueSyncOptions) {
-	_, _ = h.runCatalogueSync(ctx, author, opts)
+	if _, err := h.runCatalogueSync(ctx, author, opts); err != nil {
+		slog.Warn("author catalogue sync stopped", "author", author.Name, "error", err)
+	}
 }
 
 // refreshTitleMatch re-reads a row the catalogue sync matched by title. The
@@ -1815,6 +1816,9 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 			h.runningSyncs.start(syncID)
 		}
 		defer h.runningSyncs.done(syncID)
+	}
+	if err := h.meta.CheckQuota(ctx); err != nil {
+		return 0, err
 	}
 	// A manual Refresh Metadata reads the author's profile, catalogue and
 	// Audible catalogue past the metadata cache (#2601). Only those lookups
@@ -2358,7 +2362,14 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 		})
 	}
 
+	// A daily hold stops creating books, but the books this run already created
+	// still get hydration, file matching, search and the summary below: the
+	// next sync treats them as existing, so skipping that work would strand them.
+	var quotaErr error
 	for _, b := range candidates {
+		if quotaErr = h.meta.CheckQuota(ctx); quotaErr != nil {
+			break
+		}
 		// A cancelled or timed out run stops creating books rather than
 		// logging one failed insert per remaining work.
 		if ctx.Err() != nil {
@@ -2795,6 +2806,10 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 		seededEditions[editionTarget{ForeignID: foreignID}.cacheKey()] = editions
 	}
 	editionCache := h.prefetchHardcoverEditions(ctx, createdTargets, seededEditions)
+	if quotaErr == nil {
+		// Held calls below fail fast, so record the hold and finish local work.
+		quotaErr = h.meta.CheckQuota(ctx)
+	}
 
 	// The author's catalogue as this sync leaves it, for the rival title
 	// check (#2941): read once here instead of once per bound book.
@@ -2840,7 +2855,7 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 	if singleWork {
 		slog.Info("single-work catalogue fallback complete",
 			"author", author.Name, "foreignId", opts.onlyForeignID, "added", added)
-		return added, nil
+		return added, quotaErr
 	}
 
 	h.announceDiscoveredBooks(context.WithoutCancel(ctx), author, opts, populatedBefore, createdBooks)
@@ -2901,10 +2916,10 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 	if failed+skippedLang+skippedJunk+skippedMediaType+skippedPartBooks+skippedMissingDate+
 		skippedMinPages+skippedMissingISBN+skippedThinCluster > 0 {
 		slog.Warn("author books synced", logArgs...)
-		return added, nil
+		return added, quotaErr
 	}
 	slog.Info("author books synced", logArgs...)
-	return added, nil
+	return added, quotaErr
 }
 
 // keepWorkWithForeignID narrows a provider works list to the single work the
@@ -3411,7 +3426,7 @@ func (h *AuthorHandler) AddBook(w http.ResponseWriter, r *http.Request) {
 		h.writeAddBookError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, res.Book)
+	writeBook(w, http.StatusCreated, res.Book)
 }
 
 // logStrictMediaTypeBypass records an explicit add that the strict media-type

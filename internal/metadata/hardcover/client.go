@@ -58,7 +58,8 @@ type Client struct {
 	// (aggregator, list syncer, import-list browse, the settings test
 	// button) all spending the same budget. Every copy below carries the
 	// pointer forward; TestThrottleSharedAcrossClientCopies guards that.
-	throttle *throttle
+	throttle   *throttle
+	dailyQuota *DailyQuota
 }
 
 // NormalizeAPIToken accepts either the raw token copied from Hardcover or an
@@ -99,14 +100,14 @@ func New() *Client {
 // WithToken returns a copy of the client configured to use the given API token.
 // Required for authenticated queries such as GetUserWishlist.
 func (c *Client) WithToken(token string) *Client {
-	return &Client{http: c.http, token: token, throttle: c.pacer()}
+	return &Client{http: c.http, token: token, throttle: c.pacer(), dailyQuota: c.dailyQuota}
 }
 
 // WithTokenSource returns a copy of the client that resolves an API token
 // for each request. It is used for UI-managed credentials that can change
 // while the process is running.
 func (c *Client) WithTokenSource(source func(context.Context) string) *Client {
-	return &Client{http: c.http, token: c.token, tokenSource: source, throttle: c.pacer()}
+	return &Client{http: c.http, token: c.token, tokenSource: source, throttle: c.pacer(), dailyQuota: c.dailyQuota}
 }
 
 // NewAuthenticated creates a new client that sends Authorization: Bearer <token>
@@ -864,7 +865,14 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 	}
 
 	var lastErr error
+	// Pin credentials for the whole operation: response headers must update
+	// the same token's hold that admitted the request, even during rotation.
+	bound := c.WithToken(c.authorizationToken(ctx))
+	c = bound
 	for attempt := 0; attempt <= hardcoverMaxRetries; attempt++ {
+		if err := c.CheckQuota(ctx); err != nil {
+			return err
+		}
 		if err := c.pacer().wait(ctx); err != nil {
 			if errors.Is(err, errThrottled) {
 				if lastErr != nil {
@@ -875,7 +883,18 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 			return err
 		}
 
+		if err := c.CheckQuota(ctx); err != nil {
+			return err
+		}
 		status, header, raw, doErr := c.roundTrip(ctx, body)
+		if err := c.dailyQuota.observe(ctx, c.token, header); err != nil {
+			return err
+		}
+		if status == http.StatusTooManyRequests {
+			if err := c.CheckQuota(ctx); err != nil {
+				return err
+			}
+		}
 		if doErr != nil {
 			// A cancelled or expired context is never worth retrying, and
 			// neither is the last attempt.
@@ -886,6 +905,18 @@ func (c *Client) query(ctx context.Context, q string, vars map[string]any, out i
 			continue
 		}
 
+		if rejected := tokenRejectionError(status, raw); rejected != nil {
+			// Every later call with this token would get the same answer, so
+			// record it and let every caller stop instead of asking per row.
+			return c.dailyQuota.rejectToken(ctx, c.token, rejected)
+		}
+		if status == http.StatusOK {
+			// Hardcover accepted the token (whatever the GraphQL layer says
+			// next), so a hold left by an earlier rejection is stale.
+			if err := c.dailyQuota.clearRejected(ctx, c.token); err != nil {
+				slog.Warn("clear Hardcover rejected token hold", "error", err)
+			}
+		}
 		if status != http.StatusOK {
 			statusErr := classifyHTTPError(status, raw)
 			if status >= http.StatusInternalServerError {
@@ -1059,6 +1090,36 @@ func classifyHTTPError(status int, raw []byte) error {
 	}
 }
 
+// tokenRejectionError returns the classified "token rejected" error when the
+// response means Hardcover refused the credential itself, else nil. It is narrower than
+// isTokenRejection on purpose: that classifier words an error for the user, this
+// one starts a pause for every call, so it only takes the answers that no
+// change to the query could fix. 401 counts. A 403 counts only when its body
+// is an authentication failure (invalid_token, unauthorized, invalid_grant, or
+// the "Unable to verify token" text), not insufficient_scope, access_denied or
+// invalid_request, which can describe the one query. 5xx never counts.
+func tokenRejectionError(status int, raw []byte) error {
+	envelope, parsed := parseHardcoverError(raw)
+	if !isTokenRejection(status, envelope, parsed) {
+		return nil
+	}
+	if status == http.StatusUnauthorized && !parsed && len(bytes.TrimSpace(raw)) > 0 {
+		// Hardcover answers a bad token with a JSON body (invalid_token). A 401
+		// carrying an HTML or plain text page came from something in front of
+		// it, a proxy or a CDN, which says nothing about the token. Pausing on
+		// it would lock a valid token out for an hour, so it stays an ordinary
+		// failed call.
+		return nil
+	}
+	if status == http.StatusForbidden {
+		switch strings.ToLower(strings.TrimSpace(envelope.Error)) {
+		case "invalid_request", "access_denied", "insufficient_scope":
+			return nil
+		}
+	}
+	return classifyHTTPError(status, raw)
+}
+
 // parseHardcoverError decodes the error envelope, reporting whether the body
 // was a JSON object at all. A truncated or non-JSON body (an HTML error page
 // being the case that prompted #2128) reports false, and the caller then says
@@ -1189,6 +1250,9 @@ type hcAuthor struct {
 	Slug  string   `json:"slug"`
 	Bio   string   `json:"bio"`
 	Image *hcImage `json:"image"`
+	// BooksCount is only set from a search document; the GraphQL author
+	// selections do not ask for it. 0 means unknown.
+	BooksCount int `json:"books_count"`
 }
 
 type hcContribution struct {
@@ -1351,6 +1415,7 @@ type hcAuthorSearchDocument struct {
 	Image       any    `json:"image"`
 	ImageURL    string `json:"image_url"`
 	CachedImage any    `json:"cached_image"`
+	BooksCount  any    `json:"books_count"`
 }
 
 type hcBookSearchEnvelope struct {
@@ -1484,12 +1549,14 @@ func authorSearchDocumentToAuthor(doc hcAuthorSearchDocument) (hcAuthor, bool) {
 	if bio == "" {
 		bio = strings.TrimSpace(doc.Description)
 	}
+	booksCount, _ := searchInt(doc.BooksCount)
 	return hcAuthor{
-		ID:    id,
-		Name:  name,
-		Slug:  slug,
-		Bio:   bio,
-		Image: searchImage(doc.Image, doc.ImageURL, doc.CachedImage),
+		ID:         id,
+		Name:       name,
+		Slug:       slug,
+		Bio:        bio,
+		Image:      searchImage(doc.Image, doc.ImageURL, doc.CachedImage),
+		BooksCount: booksCount,
 	}, true
 }
 
@@ -1825,6 +1892,9 @@ func (c *Client) toAuthor(a hcAuthor) models.Author {
 	}
 	if a.Image != nil {
 		au.ImageURL = a.Image.URL
+	}
+	if a.BooksCount > 0 {
+		au.Statistics = &models.AuthorStats{BookCount: a.BooksCount}
 	}
 	return au
 }

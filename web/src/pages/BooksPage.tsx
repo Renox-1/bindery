@@ -17,6 +17,8 @@ import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
 import { oneOf, useListParams, useUrlSearchInput } from '../components/useListParams'
 import AddToLibraryModal from '../components/AddToLibraryModal'
+import BookRating from '../components/BookRating'
+import CoverImage from '../components/CoverImage'
 
 type SortMode =
   | 'title-az' | 'title-za'
@@ -24,13 +26,14 @@ type SortMode =
   | 'author-az' | 'author-za'
   | 'type-az' | 'type-za'
   | 'status-az' | 'status-za'
+  | 'rating-asc' | 'rating-desc'
 type MonitoredFilter = '' | 'monitored' | 'unmonitored'
 type StatusFilter = '' | 'wanted' | 'imported' | 'skipped'
 type MediaFilter = '' | 'ebook' | 'audiobook' | 'both'
 
 const SORT_MODES: readonly SortMode[] = [
   'title-az', 'title-za', 'date-new', 'date-old', 'author-az', 'author-za',
-  'type-az', 'type-za', 'status-az', 'status-za',
+  'type-az', 'type-za', 'status-az', 'status-za', 'rating-asc', 'rating-desc',
 ]
 const STATUS_FILTERS: readonly StatusFilter[] = ['', 'wanted', 'imported', 'skipped']
 const MEDIA_FILTERS: readonly MediaFilter[] = ['', 'ebook', 'audiobook', 'both']
@@ -330,6 +333,8 @@ export default function BooksPage() {
                 { value: 'title-za' as const, label: t('books.sortTitleZA') },
                 { value: 'date-new' as const, label: t('books.sortNewest') },
                 { value: 'date-old' as const, label: t('books.sortOldest') },
+                { value: 'author-az' as const, label: t('books.sortAuthorAZ') },
+                { value: 'author-za' as const, label: t('books.sortAuthorZA') },
               ]}
             />
           </FilterPopover>
@@ -420,6 +425,7 @@ export default function BooksPage() {
                   <SortableHeader label={t('books.colTitle')} asc="title-az" desc="title-za" />
                   <SortableHeader label={t('books.colAuthor')} asc="author-az" desc="author-za" className="hidden md:table-cell" />
                   <SortableHeader label={t('books.colYear')} asc="date-old" desc="date-new" className="hidden sm:table-cell" />
+                  <SortableHeader label={t('books.colRating')} asc="rating-asc" desc="rating-desc" className="hidden lg:table-cell" />
                   <SortableHeader label={t('books.colType')} asc="type-az" desc="type-za" />
                   <SortableHeader label={t('books.colStatus')} asc="status-az" desc="status-za" />
                 </tr>
@@ -451,11 +457,11 @@ export default function BooksPage() {
                     </td>
                     <td className="px-3 py-2">
                       <Link to={`/book/${book.id}`} state={bookNavState(i)} className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                        {book.imageUrl ? (
-                          <img loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-6 h-9 object-cover rounded flex-shrink-0" />
-                        ) : (
-                          <div className="w-6 h-9 bg-slate-200 dark:bg-zinc-800 rounded flex-shrink-0" />
-                        )}
+                        <CoverImage loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-6 h-9 object-cover rounded flex-shrink-0"
+                          fallback={
+                            <div className="w-6 h-9 bg-slate-200 dark:bg-zinc-800 rounded flex-shrink-0" />
+                          }
+                        />
                         <span className="text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
                       </Link>
                     </td>
@@ -471,6 +477,9 @@ export default function BooksPage() {
                       ) : '—'}
                     </td>
                     <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap hidden sm:table-cell">{book.releaseDate ? new Date(book.releaseDate).getFullYear() : '—'}</td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap hidden lg:table-cell">
+                      {book.averageRating && book.averageRating > 0 ? <BookRating book={book} /> : '—'}
+                    </td>
                     <td className="px-3 py-2 text-xs whitespace-nowrap">
                       {book.mediaType === 'both'
                         ? `📖🎧 ${t('common.ebook')} + ${t('common.audiobook')}`
@@ -517,16 +526,16 @@ export default function BooksPage() {
                   />
                 </label>
                 <Link to={`/book/${book.id}`} state={bookNavState(i)} className="block w-full h-full">
-                  {book.imageUrl ? (
-                    <img loading="lazy" decoding="async" src={book.imageUrl} alt={book.title} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-2 p-3 text-center">
-                      <svg className="w-8 h-8 text-slate-400 dark:text-zinc-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
-                      </svg>
-                      <span className="text-xs font-medium text-slate-700 dark:text-zinc-300 line-clamp-3">{book.title}</span>
-                    </div>
-                  )}
+                  <CoverImage loading="lazy" decoding="async" src={book.imageUrl} alt={book.title} className="w-full h-full object-cover"
+                    fallback={
+                      <div className="w-full h-full flex flex-col items-center justify-center gap-2 p-3 text-center">
+                        <svg className="w-8 h-8 text-slate-400 dark:text-zinc-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+                        </svg>
+                        <span className="text-xs font-medium text-slate-700 dark:text-zinc-300 line-clamp-3">{book.title}</span>
+                      </div>
+                    }
+                  />
                 </Link>
               </div>
               <div className="p-2">
@@ -562,6 +571,7 @@ export default function BooksPage() {
                   {book.releaseDate && (
                     <p className="text-[10px] text-slate-600 dark:text-zinc-500">{new Date(book.releaseDate).getFullYear()}</p>
                   )}
+                  <BookRating book={book} className="text-[10px] text-slate-600 dark:text-zinc-500" />
                   {book.filePath && (
                     <a
                       href={`${BINDERY_BASE}/api/v1/book/${book.id}/file`}

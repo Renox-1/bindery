@@ -10,6 +10,9 @@ export interface SystemStatus {
   imageCacheBytes?: number
   enhancedHardcoverApi: boolean
   hardcoverTokenConfigured: boolean
+  hardcoverPausedUntil?: string
+  /** True while Hardcover refused the saved token and requests are paused until it changes. */
+  hardcoverTokenRejected?: boolean
   enhancedHardcoverDisabledReason?: 'env_disabled' | 'missing_token' | 'admin_disabled' | string
 }
 

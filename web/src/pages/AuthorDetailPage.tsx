@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useConfirmDialog } from '../components/useConfirmDialog'
 import { api, ApiError, Author, AuthorAlias, Book, BookBulkAction, MediaType, Series } from '../api/client'
+import { usePolling } from '../components/usePolling'
 import ViewToggle from '../components/ViewToggle'
 import { bookStatusBadge } from '../components/bookStatus'
 import MergeAuthorsModal from '../components/MergeAuthorsModal'
@@ -19,17 +20,24 @@ import { canonicalLanguage, languageName } from '../util/language'
 import { btn, btnSize } from '../components/buttons'
 import Switch from '../components/Switch'
 import CoverPlaceholder from '../components/CoverPlaceholder'
+import BookRating from '../components/BookRating'
 import MoreMenu from '../components/MoreMenu'
 import Section from '../components/Section'
 import AuthorSyncNotice from '../components/AuthorSyncNotice'
 import CatalogueReconciliationModal from '../components/CatalogueReconciliationModal'
 import DuplicateCandidatesModal from '../components/DuplicateCandidatesModal'
+import CoverImage from '../components/CoverImage'
 
 type MediaFilter = '' | 'ebook' | 'audiobook'
 // 'excluded' folds in what used to be a separate "Show excluded" checkbox. It
 // is a status like any other from the user's point of view, and as a checkbox
 // sitting outside the chip groups it read as belonging to whichever group it
 // happened to wrap next to.
+// A book still wanted (some requested format is missing) that already has a
+// file for another format. It belongs in the library as well as in Wanted.
+const isPartiallyOwned = (b: Book): boolean =>
+  b.status === 'wanted' && !!(b.ebookFilePath || b.audiobookFilePath)
+
 type StatusFilter = '' | 'wanted' | 'imported' | 'skipped' | 'excluded'
 type PublishedFilter = '' | 'released' | 'upcoming'
 type MonitoredFilter = '' | 'monitored' | 'unmonitored'
@@ -97,6 +105,13 @@ interface AuthorNavState {
 // as it was before the click (#2601).
 const REFRESH_POLL_INTERVAL_MS = 2000
 const REFRESH_POLL_TIMEOUT_MS = 60000
+// A sync already running when the page loads (an add's, typically) is polled
+// with no time limit, backing off from 2 s to 10 s: a large catalogue can
+// spend minutes in the provider fetch (#3058).
+const SYNC_POLL_START_MS = 2000
+const SYNC_POLL_MAX_MS = 10000
+// Consecutive failed polls or reloads before the page stops watching a sync.
+const SYNC_POLL_MAX_FAILURES = 3
 
 export default function AuthorDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -138,6 +153,14 @@ export default function AuthorDetailPage() {
   const [showCatalogueReconciliation, setShowCatalogueReconciliation] = useState(false)
   const [showDuplicateCandidates, setShowDuplicateCandidates] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The sync poll stopped trying (#3058): a 404/403, or a few failures in a row.
+  const [syncGaveUp, setSyncGaveUp] = useState(false)
+  const syncFailures = useRef(0)
+  const noteSyncFailure = (err: unknown) => {
+    syncFailures.current++
+    const status = err instanceof ApiError ? err.status : 0
+    if (status === 404 || status === 403 || syncFailures.current >= SYNC_POLL_MAX_FAILURES) setSyncGaveUp(true)
+  }
 
   // Bulk multi-select state (#791). Selection is keyed by book.id and
   // intentionally scoped to the filtered view: hidden books can't be
@@ -162,7 +185,10 @@ export default function AuthorDetailPage() {
   // mounted across Previous/Next (only authorId changes), so a plain
   // "already loaded" check on authorSeries.length kept the previous
   // author's series and grouped the new author's books against them.
-  const loadedSeriesAuthorId = useRef<number | null>(null)
+  // Which author and reload the series were loaded for: a manual Refresh
+  // reloads through reloadKey, and its sync can change the series a book is
+  // in, so the grouping is fetched again then too.
+  const loadedSeries = useRef<{ authorId: number; reloadKey: number } | null>(null)
 
   useEffect(() => {
     try { localStorage.setItem('bindery.group.author-detail.series', String(groupBySeries)) } catch { /* ignore */ }
@@ -172,16 +198,19 @@ export default function AuthorDetailPage() {
   // the default flat view never pays for the extra round trip. Failures fall
   // back to an empty set — every book then lands in the Standalone group.
   useEffect(() => {
-    if (!groupBySeries || loadedSeriesAuthorId.current === authorId) return
+    const loaded = loadedSeries.current
+    if (!groupBySeries || (loaded?.authorId === authorId && loaded.reloadKey === reloadKey)) return
     // Drop the previous author's series before fetching, so neither the
     // in flight window nor a failed fetch groups these books against them.
-    setAuthorSeries([])
+    // The same author's stay up while a refresh reload fetches, so the
+    // grouping does not flash every book into Standalone.
+    if (loaded?.authorId !== authorId) setAuthorSeries([])
     let cancelled = false
     api.listAuthorSeries(authorId)
-      .then(s => { if (!cancelled) { setAuthorSeries(s); loadedSeriesAuthorId.current = authorId } })
+      .then(s => { if (!cancelled) { setAuthorSeries(s); loadedSeries.current = { authorId, reloadKey } } })
       .catch(() => { /* leave empty: books fall into Standalone */ })
     return () => { cancelled = true }
-  }, [groupBySeries, authorId])
+  }, [groupBySeries, authorId, reloadKey])
 
   // Filter / sort state — persisted to localStorage under page-scoped keys
   const [typeFilter, setTypeFilter] = useState<MediaFilter>(() => {
@@ -281,11 +310,52 @@ export default function AuthorDetailPage() {
       api.getAuthor(authorId),
       api.listAllBooks({ authorId, includeExcluded: showExcluded }),
     ])
-      .then(([a, bs]) => { if (!cancelled) { setAuthor(a); setBooks(bs) } })
-      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
+      .then(([a, bs]) => {
+        if (cancelled) return
+        setAuthor(a)
+        setBooks(bs)
+        syncFailures.current = 0
+        setSyncGaveUp(false)
+      })
+      .catch(err => {
+        setError(err instanceof Error ? err.message : 'Failed to load')
+        if (!cancelled) noteSyncFailure(err)
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [authorId, showExcluded, reloadKey])
+
+  // An author whose catalogue sync is running when the page loads, straight
+  // after an add or after a Refresh poll gave up, is polled until the sync
+  // ends and then reloaded, so the page does not settle on "no books" while
+  // the catalogue is still being fetched (#3058). A manual Refresh runs its
+  // own poll, so this one stands down meanwhile. The poll keeps running until
+  // a reload has actually succeeded (a failed reload leaves the author marked
+  // as syncing, so the next poll reloads again), and gives up on a 404/403 or
+  // after a few failures in a row, so a permanent error ends in the error
+  // state rather than a spinner that never clears.
+  const syncing = !!author?.syncInProgress && author.id === authorId && !refreshing && !syncGaveUp
+  const [pollDelay, setPollDelay] = useState(SYNC_POLL_START_MS)
+  const backOff = () => setPollDelay(d => Math.min(d * 1.5, SYNC_POLL_MAX_MS))
+  usePolling(() => {
+    const session = pageSession.current
+    api.getAuthor(authorId)
+      .then(latest => {
+        if (!session.active) return
+        if (!latest.syncInProgress) {
+          quietReload.current = true
+          setReloadKey(k => k + 1)
+          return
+        }
+        syncFailures.current = 0
+        backOff()
+      })
+      .catch(err => {
+        if (!session.active) return
+        noteSyncFailure(err)
+        backOff()
+      })
+  }, pollDelay, syncing)
 
   // Validated against authorId: stale state (browser back/forward) or no
   // state at all (opened from elsewhere) must read as "no nav info", not
@@ -562,6 +632,10 @@ export default function AuthorDetailPage() {
       // the selected format has no file yet, the aggregate still supplies
       // 'wanted' and the in-flight states (which have no per-format field).
       const statusOf = (b: Book): string => {
+        // With no type chip, any tracked file puts a wanted book in the library
+        // view as well (#3132). Only the Imported filter remaps it: the book
+        // stays in Wanted because a requested format is still missing.
+        if (!typeFilter && statusFilter === 'imported' && isPartiallyOwned(b)) return 'imported'
         if (!typeFilter || (b.mediaType || 'ebook') !== 'both') return b.status
         const path = typeFilter === 'ebook' ? b.ebookFilePath : b.audiobookFilePath
         return path ? 'imported' : b.status
@@ -678,7 +752,7 @@ export default function AuthorDetailPage() {
     : t('authorMetadataLink.actionFindBetter', 'Find better metadata')
   const counts = {
     total: books.length,
-    imported: books.filter(b => b.status === 'imported').length,
+    imported: books.filter(b => b.status === 'imported' || isPartiallyOwned(b)).length,
     wanted: searchableWantedCount,
     audiobook: books.filter(b => b.mediaType === 'audiobook').length,
   }
@@ -764,16 +838,16 @@ export default function AuthorDetailPage() {
               selectingClick(e, book)
             }}
           >
-            {book.imageUrl ? (
-              <img loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-6 h-9 object-cover rounded flex-shrink-0" />
-            ) : (
-              <CoverPlaceholder
-                id={book.id}
-                title={book.title}
-                size="xs"
-                className="w-6 h-9 rounded flex-shrink-0"
-              />
-            )}
+            <CoverImage loading="lazy" decoding="async" src={book.imageUrl} alt="" className="w-6 h-9 object-cover rounded flex-shrink-0"
+              fallback={
+                <CoverPlaceholder
+                  id={book.id}
+                  title={book.title}
+                  size="xs"
+                  className="w-6 h-9 rounded flex-shrink-0"
+                />
+              }
+            />
             <span className="min-w-0 flex-1">
               <span className="block text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
               <span className="mt-1 flex flex-wrap items-center gap-1 sm:hidden">
@@ -801,6 +875,9 @@ export default function AuthorDetailPage() {
           </Link>
         </td>
         <td className="hidden sm:table-cell px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap align-middle">{fmtPublishedYear(book.releaseDate)}</td>
+        <td className="hidden md:table-cell px-3 py-2 text-slate-600 dark:text-zinc-400 whitespace-nowrap align-middle">
+          {book.averageRating && book.averageRating > 0 ? <BookRating book={book} /> : '—'}
+        </td>
         <td className="hidden sm:table-cell px-3 py-2 text-xs whitespace-nowrap align-middle">
           {mediaLabel(book.mediaType)}
         </td>
@@ -855,6 +932,7 @@ export default function AuthorDetailPage() {
               >
                 Published{sortArrow('date-old', 'date-new')}
               </th>
+              <th className="hidden md:table-cell md:w-24 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">{t('books.colRating')}</th>
               <th className="hidden sm:table-cell sm:w-36 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Type</th>
               <th className="hidden sm:table-cell sm:w-36 text-left px-3 py-2 text-xs font-medium text-slate-600 dark:text-zinc-400 uppercase">Status</th>
             </tr>
@@ -895,11 +973,11 @@ export default function AuthorDetailPage() {
             onClick={e => { selectingClick(e, book) }}
           >
             <div className="aspect-[2/3] bg-slate-200 dark:bg-zinc-800 relative">
-              {book.imageUrl ? (
-                <img loading="lazy" decoding="async" src={book.imageUrl} alt={book.title} className="w-full h-full object-cover" />
-              ) : (
-                <CoverPlaceholder id={book.id} title={book.title} size="sm" className="w-full h-full" />
-              )}
+              <CoverImage loading="lazy" decoding="async" src={book.imageUrl} alt={book.title} className="w-full h-full object-cover"
+                fallback={
+                  <CoverPlaceholder id={book.id} title={book.title} size="sm" className="w-full h-full" />
+                }
+              />
             </div>
             {/* Fixed height. The badge row and the year are both variable, so
                 cards in the same row used to end at different heights and the
@@ -930,7 +1008,10 @@ export default function AuthorDetailPage() {
               {/* No `book.releaseDate &&` guard: fmtPublishedYear already
                   returns an em dash for a missing date, so the conditional only
                   made the row appear and disappear between cards. */}
-              <p className="text-[10px] text-slate-600 dark:text-zinc-500 mt-auto">{fmtPublishedYear(book.releaseDate)}</p>
+              <p className="flex items-center justify-between gap-2 text-[10px] text-slate-600 dark:text-zinc-500 mt-auto">
+                <span>{fmtPublishedYear(book.releaseDate)}</span>
+                <BookRating book={book} />
+              </p>
             </div>
           </Link>
         </div>
@@ -981,13 +1062,13 @@ export default function AuthorDetailPage() {
 
       <div className="flex flex-col sm:flex-row gap-6 mb-8">
         <div className="w-32 flex-shrink-0">
-          {author.imageUrl ? (
-            <img src={author.imageUrl} alt={author.authorName} className="w-full rounded-full shadow-lg aspect-square object-cover" />
-          ) : (
-            <div className="aspect-square rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center text-2xl font-bold text-slate-500 dark:text-zinc-600">
-              {author.authorName.charAt(0).toUpperCase()}
-            </div>
-          )}
+          <CoverImage src={author.imageUrl} alt={author.authorName} className="w-full rounded-full shadow-lg aspect-square object-cover"
+            fallback={
+              <div className="aspect-square rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center text-2xl font-bold text-slate-500 dark:text-zinc-600">
+                {author.authorName.charAt(0).toUpperCase()}
+              </div>
+            }
+          />
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="text-2xl font-bold mb-1 [overflow-wrap:anywhere]">{author.authorName}</h2>
@@ -1368,8 +1449,16 @@ export default function AuthorDetailPage() {
           </div>
         )}
 
+        {syncing && (
+          <p role="status" className="mb-3 flex items-center gap-2 text-sm text-slate-600 dark:text-zinc-400">
+            <span aria-hidden="true" className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            {books.length === 0
+              ? t('authorDetail.syncing', 'Fetching this author’s catalogue. Books appear here when it finishes, which can take a few minutes for a large catalogue.')
+              : t('authorDetail.syncingMore', 'Fetching this author’s catalogue. Any new books appear here when it finishes.')}
+          </p>
+        )}
         {books.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-zinc-500">No books tracked for this author yet.</p>
+          !syncing && <p className="text-sm text-slate-600 dark:text-zinc-500">No books tracked for this author yet.</p>
         ) : filteredBooks.length === 0 ? (
           <p className="text-sm text-slate-600 dark:text-zinc-500">No books match the current filters.</p>
         ) : groupBySeries ? (
