@@ -431,7 +431,7 @@ func TestApplyGenresSeriesCoverage(t *testing.T) {
 	_ = env.database.Close()
 	rec = httptest.NewRecorder()
 	h.ApplyGenres(rec, covAuRequest(http.MethodPut, "/", `{"genres":[]}`, map[string]string{"id": id}, 0, ""))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("closed db apply: got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("closed db apply: got %d %s, want 500 (a store fault is not a missing series)", rec.Code, rec.Body.String())
 	}
 }

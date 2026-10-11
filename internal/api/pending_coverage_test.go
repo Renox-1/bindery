@@ -218,8 +218,8 @@ func TestPendingDeleteBadIDNotFoundAndDBError(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	h.Grab(rec, covQPendingReq(1))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("closed db grab: %d, want 404", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("closed db grab: %d, want 500 (a store fault is not a missing release)", rec.Code)
 	}
 }
 
