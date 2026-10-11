@@ -211,7 +211,11 @@ func (h *DownloadClientHandler) Diagnose(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	client, err := h.clients.GetByID(r.Context(), id)
-	if err != nil || client == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if client == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download client not found"})
 		return
 	}

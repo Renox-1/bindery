@@ -179,7 +179,11 @@ func (h *DownloadClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client, err := h.clients.GetByID(r.Context(), id)
-	if err != nil || client == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if client == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download client not found"})
 		return
 	}
@@ -189,8 +193,7 @@ func (h *DownloadClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *DownloadClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var c models.DownloadClient
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &c) {
 		return
 	}
 	if c.Name == "" || c.Host == "" {
@@ -230,14 +233,18 @@ func (h *DownloadClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existing, err := h.clients.GetByID(r.Context(), id)
-	if err != nil || existing == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if existing == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download client not found"})
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeBodyReadError(w, err)
 		return
 	}
 
@@ -432,7 +439,11 @@ func (h *DownloadClientHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client, err := h.clients.GetByID(r.Context(), id)
-	if err != nil || client == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if client == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "download client not found"})
 		return
 	}
@@ -483,8 +494,7 @@ func pathVisibilityForResponse(v downloader.PathVisibility) *downloader.PathVisi
 // The response shape mirrors Test (test-by-id) so the UI reuses one path.
 func (h *DownloadClientHandler) TestConfig(w http.ResponseWriter, r *http.Request) {
 	var c models.DownloadClient
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &c) {
 		return
 	}
 	if c.Host == "" {
