@@ -63,6 +63,17 @@ describe('metadataSourceLink', () => {
     expect(metadataSourceLink('nb:../x', 'book')).toBeNull()
   })
 
+  it('links BnF book records to their catalogue ARK but not authority-file authors', () => {
+    expect(metadataSourceLink('bnf:cb48780493c', 'book')).toEqual({
+      url: 'https://catalogue.bnf.fr/ark:/12148/cb48780493c',
+      label: 'BnF',
+    })
+    expect(metadataSourceLink('bnf:author:11885918', 'author')).toBeNull()
+    expect(metadataSourceLink('bnf:author:11885918', 'book')).toBeNull()
+    expect(metadataSourceLink('bnf:../x', 'book')).toBeNull()
+    expect(metadataSourceLink('bnf:cb48780493c', 'author')).toBeNull()
+  })
+
   it('returns null for local or malformed provider ids', () => {
     expect(metadataSourceLink('abs:abc', 'book')).toBeNull()
     expect(metadataSourceLink('calibre:7', 'book')).toBeNull()
@@ -86,6 +97,7 @@ describe('providerDisplayName', () => {
     expect(providerDisplayName('googlebooks')).toBe('Google Books')
     expect(providerDisplayName('dnb')).toBe('DNB')
     expect(providerDisplayName('nb')).toBe('Nasjonalbiblioteket')
+    expect(providerDisplayName('bnf')).toBe('BnF')
     expect(providerDisplayName('calibre')).toBe('Calibre')
     expect(providerDisplayName('audiobookshelf')).toBe('Audiobookshelf')
   })
@@ -112,6 +124,7 @@ describe('providerFromBookForeignId', () => {
     expect(providerFromBookForeignId('HC:123')).toBe('hardcover')
     expect(providerFromBookForeignId('dnb:123')).toBe('dnb')
     expect(providerFromBookForeignId('nb:a0000000000000000000000000000001')).toBe('nb')
+    expect(providerFromBookForeignId('bnf:cb48780493c')).toBe('bnf')
     expect(providerFromBookForeignId('calibre:7')).toBe('calibre')
     expect(providerFromBookForeignId('abs:lib:item')).toBe('audiobookshelf')
   })
