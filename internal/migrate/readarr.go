@@ -49,7 +49,7 @@ func ImportReadarr(
 	if dbPath == "" {
 		return nil, errors.New("readarr db path is required")
 	}
-	src, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&immutable=1")
+	src, err := sql.Open("sqlite", db.SQLiteFileURI(dbPath, "mode=ro&immutable=1"))
 	if err != nil {
 		return nil, fmt.Errorf("open readarr db: %w", err)
 	}
