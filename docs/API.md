@@ -51,7 +51,7 @@ The text is written for people to read and is safe to show. Messages that come f
 | 404 | No such route (`{"error": "not found"}`), or no such row. A row you may not see is also 404, never 403 |
 | 405 | The route exists but not for that method (`{"error": "method not allowed"}`). The `Allow` header lists the methods that do work |
 | 409 | The request conflicts with current state |
-| 413 | The request body is larger than the limit, `{"error": "request body too large"}`. JSON bodies are limited to 1 MiB; uploads have their own, larger limits. This used to be a 400 |
+| 413 | The request body is larger than the limit, `{"error": "request body too large"}`. JSON bodies are limited to 1 MiB; uploads have their own, larger limits. This used to be a 400. Endpoints are being moved over one group at a time: a few older ones, such as creating an author, still answer `400 invalid request body` for an oversize body |
 | 429 | Too many attempts |
 | 500 | A server fault: `{"error": "internal server error"}`. A store error is never reported as a 404. When the fault was an unexpected crash the body also carries `request_id`, which matches the `request_id` on the log entry in Settings, Logs |
 | 502 | Another service failed: a metadata provider, an indexer, a download client or Prowlarr. The message is generic, except on the connection test endpoints, which relay the first line of what the other service said with credentials redacted, at most 200 characters |
