@@ -156,12 +156,24 @@ func (r *LibraryRoots) Contains(ctx context.Context, p string) bool {
 		})
 		return false
 	}
-	resolved := resolveWithMissingTail(filepath.Clean(p))
+	// A ".." segment is refused outright. Clean folds "a/link/.." to "a", but
+	// the kernel resolves the link first, so the path the delete would use
+	// ("a/link/../x" is the parent of the link target) is not the one checked
+	// here. The importer never writes one.
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	resolved, ok := resolveWithMissingTail(filepath.Clean(p))
+	if !ok {
+		return false
+	}
 	for _, root := range roots {
 		if containsUnderRoot(resolved, root) {
 			return true
 		}
-		if realRoot := resolveWithMissingTail(root); realRoot != root && containsUnderRoot(resolved, realRoot) {
+		if realRoot, rok := resolveWithMissingTail(root); rok && realRoot != root && containsUnderRoot(resolved, realRoot) {
 			return true
 		}
 	}
@@ -172,15 +184,28 @@ func (r *LibraryRoots) Contains(ctx context.Context, p string) bool {
 // it) does not exist, the deepest existing ancestor is resolved and the
 // missing tail appended unchanged, so the result is the path the filesystem
 // would actually use. p must be absolute and Cleaned.
-func resolveWithMissingTail(p string) string {
+//
+// ok is false when a component exists but cannot be resolved: a dangling
+// symlink or a symlink loop. EvalSymlinks fails for those exactly as it does
+// for a missing name, and treating them as missing would accept a path that
+// runs through a link whose target is not there yet (or never will be
+// resolvable here), so the caller must refuse it.
+func resolveWithMissingTail(p string) (string, bool) {
 	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return real
+		return real, true
+	}
+	if _, err := os.Lstat(p); err == nil {
+		return "", false
 	}
 	parent := filepath.Dir(p)
 	if parent == p {
-		return p
+		return p, true
 	}
-	return filepath.Join(resolveWithMissingTail(parent), filepath.Base(p))
+	head, ok := resolveWithMissingTail(parent)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(head, filepath.Base(p)), true
 }
 
 // ResolveContained resolves p by following symlinks and returns the resolved

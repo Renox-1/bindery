@@ -234,6 +234,66 @@ func TestLibraryRoots_Contains_SymlinkOutOfRootRefused(t *testing.T) {
 	}
 }
 
+// A path that runs through a symlink that cannot be resolved (dangling target
+// or a loop) is not "a missing file": EvalSymlinks fails the same way for both,
+// and appending the tail to the last resolvable parent would accept a path the
+// filesystem may send anywhere once the target appears. It must be refused.
+func TestLibraryRoots_Contains_UnresolvableSymlinkRefused(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	ctx := context.Background()
+
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(outside, "not-yet"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, dangling) {
+		t.Error("dangling symlink must be refused")
+	}
+	if roots.Contains(ctx, filepath.Join(dangling, "sub", "book.epub")) {
+		t.Error("missing leaf under a dangling directory symlink must be refused")
+	}
+	loop1, loop2 := filepath.Join(root, "loop1"), filepath.Join(root, "loop2")
+	if err := os.Symlink(loop2, loop1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(loop1, loop2); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, filepath.Join(loop1, "book.epub")) {
+		t.Error("path through a symlink loop must be refused")
+	}
+}
+
+// ".." after a directory symlink: Clean folds "root/link/../x" to "root/x", but
+// the kernel resolves the link first and lands beside the link's target, which
+// can be outside the root. The check would be looking at a different path than
+// the delete uses, so any ".." segment is refused.
+func TestLibraryRoots_Contains_DotDotAfterSymlinkRefused(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "books")
+	outside := filepath.Join(base, "outside", "deep")
+	for _, d := range []string{root, outside} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	victim := mustWrite(t, filepath.Join(base, "outside", "victim.epub"))
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	// root/link/../victim.epub is outside/victim.epub on disk.
+	p := root + "/link/../victim.epub"
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("test setup: %s should reach the victim file: %v", p, err)
+	}
+	if roots.Contains(context.Background(), p) {
+		t.Errorf("Contains(%q) = true; it reaches %s outside the root", p, victim)
+	}
+}
+
 // A root that is itself a symlink (a library on another volume) must keep
 // working: both sides are resolved before comparing.
 func TestLibraryRoots_Contains_SymlinkedRoot(t *testing.T) {

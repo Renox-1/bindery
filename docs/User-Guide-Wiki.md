@@ -1224,6 +1224,11 @@ Knowing the edges saves time:
   linked to another disk (`/books/Author -> /mnt/disk2/Author`), is written
   through on import and followed when serving a book, including when it
   points outside your library folders, because only you can create one.
+  Deleting a book or author with its files is the exception: it only removes
+  files that resolve to a place inside your library folders, so files behind
+  a linked folder that points elsewhere stay on disk (the log says
+  `path containment: refusing to delete file`) and the book is still removed
+  from Bindery.
   Library Scan follows a library or audiobook folder that is itself a symlink
   and records the books under the path you configured, but it does not
   descend into a linked folder *inside* it, so books under a linked author
