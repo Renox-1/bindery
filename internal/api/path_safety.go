@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/vavallee/bindery/internal/models"
 )
@@ -39,10 +40,14 @@ type RootLister interface {
 // A nil *LibraryRoots is a deliberate signal: "no containment check
 // available". Callers treat nil as "allow", preserving backwards behaviour
 // for tests and any code path that hasn't been wired yet. The production
-// wiring in cmd/bindery/main.go always supplies a non-nil instance.
+// wiring in cmd/bindery/main.go always supplies a non-nil instance seeded with
+// BINDERY_LIBRARY_DIR (default /books). A non-nil instance with no roots
+// resolving refuses everything.
 type LibraryRoots struct {
 	lister   RootLister
 	defaults []string
+
+	noRootsOnce sync.Once // one WARN when Contains finds zero roots
 }
 
 // NewLibraryRoots builds a LibraryRoots backed by the given lister and any
@@ -116,19 +121,26 @@ func (r *LibraryRoots) Configured(ctx context.Context) []string {
 //   - Empty or relative inputs are rejected. The importer always writes
 //     absolute paths; a relative path in a `file_path` column is a bug or a
 //     hostile payload, and there is no safe way to anchor it.
-//   - p and each root are filepath.Cleaned before comparison so trailing
-//     slashes and `..` segments don't bypass the prefix check.
-//   - Symlinks inside p are resolved via filepath.EvalSymlinks when possible.
-//     If the path no longer exists, EvalSymlinks fails — we fall back to the
-//     lexical Clean+Rel check rather than refusing the delete (the file is
-//     already gone or the symlink target moved; either way refusing here
-//     would just orphan the DB row indefinitely).
+//   - p and each root are filepath.Cleaned and symlink-resolved before
+//     comparison, so trailing slashes, `..` segments and symlinks cannot
+//     bypass the prefix check. A root that is itself a symlink (a library on
+//     another volume) is resolved too, so it keeps matching.
+//   - When p does not exist (the file is already gone) the deepest existing
+//     ancestor is resolved and the missing tail appended, so a stale row for a
+//     deleted file still passes while a missing leaf under a directory symlink
+//     that escapes the root does not. There is no lexical fallback: a symlink
+//     that sits inside a root but resolves outside every root is refused.
 //   - Containment is established via filepath.Rel: the relative path from
 //     the root to p must not start with ".." and must not be "." (a root
 //     pointed at itself is not a valid book file).
+//   - When no root resolves at all (no DB rows, no static defaults, or the
+//     lister failed with no defaults) nothing can be "inside" and the answer
+//     is false, with a one time WARN naming the cause. Production wiring
+//     always seeds BINDERY_LIBRARY_DIR (default /books), so this is only
+//     reachable if that wiring is removed.
 //
 // Returns true iff at least one root contains p. A nil receiver returns
-// true — the caller has opted out of the check.
+// true: the caller has opted out of the check.
 func (r *LibraryRoots) Contains(ctx context.Context, p string) bool {
 	if r == nil {
 		return true
@@ -137,32 +149,38 @@ func (r *LibraryRoots) Contains(ctx context.Context, p string) bool {
 	if p == "" || !filepath.IsAbs(p) {
 		return false
 	}
-	cleaned := filepath.Clean(p)
-	// Best-effort symlink resolution. A failure here (file deleted, broken
-	// link, permission denied) just falls back to the lexical check below.
-	resolved := cleaned
-	if real, err := filepath.EvalSymlinks(cleaned); err == nil {
-		resolved = real
-	}
 	roots := r.resolveRoots(ctx)
 	if len(roots) == 0 {
-		// No roots configured at all (no DB rows AND no static defaults).
-		// We can't tell what's "inside"; allow to preserve legacy behaviour
-		// for single-tenant installs that never wired roots. Production
-		// wiring always seeds at least one default.
-		return true
+		r.noRootsOnce.Do(func() {
+			slog.Warn("path containment: no library roots configured (no root folders and no BINDERY_LIBRARY_DIR / BINDERY_AUDIOBOOK_DIR); refusing every file delete until one is set")
+		})
+		return false
 	}
+	resolved := resolveWithMissingTail(filepath.Clean(p))
 	for _, root := range roots {
 		if containsUnderRoot(resolved, root) {
 			return true
 		}
-		// Also try the un-resolved form: symlinks pointing into the library
-		// from outside should still pass when the lexical path is inside.
-		if resolved != cleaned && containsUnderRoot(cleaned, root) {
+		if realRoot := resolveWithMissingTail(root); realRoot != root && containsUnderRoot(resolved, realRoot) {
 			return true
 		}
 	}
 	return false
+}
+
+// resolveWithMissingTail resolves symlinks in p. If p (or a trailing part of
+// it) does not exist, the deepest existing ancestor is resolved and the
+// missing tail appended unchanged, so the result is the path the filesystem
+// would actually use. p must be absolute and Cleaned.
+func resolveWithMissingTail(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(resolveWithMissingTail(parent), filepath.Base(p))
 }
 
 // ResolveContained resolves p by following symlinks and returns the resolved
