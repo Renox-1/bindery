@@ -83,9 +83,12 @@ func TestBookRepo_ListPageFiltered_InLibraryIncludesPartiallyOwned(t *testing.T)
 	// Wanted is unchanged: monitored and status wanted, owned or not.
 	eq("wanted", titles(BookListFilter{Status: models.BookStatusWanted}),
 		[]string{"NothingOwned", "PartialAudio", "PartialEbook", "PartialTwoEbooks"})
-	// The format chips compose with the In Library filter.
+	// The format chips compose with In Library and require the book to own that
+	// format: a book holding only an ebook is not in the audiobook library.
 	eq("in library audiobook", titles(BookListFilter{Status: models.BookStatusImported, MediaType: "audiobook"}),
-		[]string{"Complete", "PartialAudio", "PartialEbook", "PartialTwoEbooks", "PartialUnmonitored"})
+		[]string{"Complete", "PartialAudio"})
+	eq("in library ebook", titles(BookListFilter{Status: models.BookStatusImported, MediaType: "ebook"}),
+		[]string{"Complete", "EbookOnly", "PartialEbook", "PartialTwoEbooks", "PartialUnmonitored"})
 	// All is untouched and has no duplicates.
 	if got := titles(BookListFilter{}); len(got) != 8 {
 		t.Errorf("all = %v, want 8 books", got)

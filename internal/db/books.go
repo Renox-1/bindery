@@ -358,14 +358,10 @@ func (r *BookRepo) ListPageFiltered(ctx context.Context, f BookListFilter, limit
 	case "":
 	case models.BookStatusImported:
 		// In Library means "owns at least one format", not "owns every format
-		// it wants". A dual format book with one file on disk is status
-		// 'wanted' (the other format is missing, #1634) yet is plainly in the
-		// library, so it matches here as well as under Wanted (#3132). EXISTS,
-		// not a JOIN, so a book with several tracked files is still one row and
-		// the total stays a book count. 'skipped' is a user decision and stays
-		// out whether or not a file exists.
-		where += " AND (books.status = ? OR (books.status = ? AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = books.id)))"
-		args = append(args, models.BookStatusImported, models.BookStatusWanted)
+		// it wants" (#3132). See InLibraryPredicate for the rule. With a format
+		// chip active the wanted branch must own that format, so Audiobook plus
+		// In Library does not list a book that only has an ebook.
+		where += " AND " + InLibraryPredicate("books", f.MediaType)
 	case models.BookStatusWanted:
 		where += " AND books.status = ? AND books.monitored = 1"
 		args = append(args, f.Status)
