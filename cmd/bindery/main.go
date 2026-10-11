@@ -1000,7 +1000,7 @@ func main() {
 		r.Post("/auth/password", authHandler.ChangePassword)
 		// OIDC — login/callback are unauthenticated; provider management requires auth.
 		r.Get("/auth/oidc/providers", oidcHandler.GetProviders)
-		r.Get("/auth/oidc/redirect-base", oidcHandler.GetRedirectBase)
+		registerOIDCRedirectBaseRoute(r, oidcHandler)
 		// The discovery probe is admin-only: it is an outbound fetch oracle
 		// against the container's own network (see registerOIDCDiscoveryRoutes).
 		registerOIDCDiscoveryRoutes(r, oidcHandler)

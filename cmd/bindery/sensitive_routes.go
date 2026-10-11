@@ -179,6 +179,23 @@ func registerOIDCDiscoveryRoutes(r chi.Router, h oidcDiscoveryRouteHandler) {
 	})
 }
 
+// oidcRedirectBaseRouteHandler is the surface registerOIDCRedirectBaseRoute needs.
+type oidcRedirectBaseRouteHandler interface {
+	GetRedirectBase(http.ResponseWriter, *http.Request)
+}
+
+// registerOIDCRedirectBaseRoute mounts GET /auth/oidc/redirect-base, which is
+// admin-only (#1640). It reports the base URL Bindery resolved for the OIDC
+// redirect_uri and whether BINDERY_OIDC_REDIRECT_BASE_URL is set, and exists
+// only to drive the admin settings preview. The login page does not call it, so
+// gating it costs nothing for sign-in.
+func registerOIDCRedirectBaseRoute(r chi.Router, h oidcRedirectBaseRouteHandler) {
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAdmin)
+		r.Get("/auth/oidc/redirect-base", h.GetRedirectBase)
+	})
+}
+
 // useAPIAuth installs the auth stack every /api route sits behind: identity
 // and mode resolution, the requester allow list, then the two CSRF guards.
 // Shared by both API trees in main.go (/api and /api/v1) and by the route
