@@ -17,6 +17,8 @@ func TestResolveMetadataPrimaryProvider(t *testing.T) {
 		{"unset defaults to openlibrary even with a token", "", true, "openlibrary"},
 		{"explicit openlibrary", "openlibrary", false, "openlibrary"},
 		{"explicit dnb", "dnb", false, "dnb"},
+		{"explicit nb", "nb", false, "nb"},
+		{"explicit bnf", "bnf", false, "bnf"},
 		{"hardcover with a token", "hardcover", true, "hardcover"},
 		{"hardcover without a token falls back", "hardcover", false, "openlibrary"},
 		{"unknown value falls back", "goodreads", true, "openlibrary"},
