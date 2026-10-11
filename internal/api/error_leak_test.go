@@ -603,15 +603,16 @@ func TestErrorLeak_ProwlarrTestAndSyncUpstreamBody(t *testing.T) {
 	}
 	id := strconv.FormatInt(inst.ID, 10)
 
-	// Test keeps its documented contract: 200 with ok "false" and the reason.
+	// Test keeps its documented contract: 200 with ok false (a boolean) and the reason.
 	rec := httptest.NewRecorder()
 	h.Test(rec, withURLParam(httptest.NewRequest(http.MethodPost, "/prowlarr/"+id+"/test", nil), "id", id))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("test status = %d, want the documented 200 envelope: %s", rec.Code, rec.Body.String())
 	}
-	var out map[string]string
+	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if out["ok"] != "false" || out["error"] == "" || len(out["error"]) > upstreamDetailMax {
+	detail, _ := out["error"].(string)
+	if out["ok"] != false || detail == "" || len(detail) > upstreamDetailMax {
 		t.Errorf("test body = %v", out)
 	}
 	for _, frag := range []string{leakSecret, "stack trace", "secret.go", "<html>"} {
