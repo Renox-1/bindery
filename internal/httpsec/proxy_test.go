@@ -447,6 +447,29 @@ func TestDirectGuardedTransport_PrivateLANNotPolicyRefused(t *testing.T) {
 	}
 }
 
+// The dial check itself lives in this package, so pin it here too: link-local
+// and metadata addresses, in the forms a URL can spell them, are refused at
+// connect time even under the permissive control-client policy.
+func TestDirectGuardedTransport_LinkLocalAndMetadataRefusedAtDial(t *testing.T) {
+	for _, target := range []string{
+		"http://169.254.169.254/",
+		"http://[::ffff:169.254.169.254]/",
+		"http://[fd00:ec2::254]/",
+		"http://[fe80::1]/",
+		"http://0.0.0.0:9/",
+	} {
+		resp, err := directFetch(t, target, 2*time.Second)
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Errorf("GET %s succeeded; want a policy refusal", target)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("GET %s: %v; want a policy refusal, not a network error", target, err)
+		}
+	}
+}
+
 // The control clients are intentionally left off BINDERY_OUTBOUND_PROXY.
 func TestDirectGuardedTransport_IgnoresOutboundProxy(t *testing.T) {
 	resetProxy(t)
