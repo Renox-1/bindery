@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/vavallee/bindery/internal/httpsec"
@@ -47,13 +48,32 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return false
 }
 
+// Free text credentials. httpsec.RedactSecrets only knows URL shaped secrets
+// (?apikey=..., user:pass@host), but a service's own error line can quote a
+// header or a form field: "Authorization: Bearer x", "apikey=x", {"token":"x"}.
+var (
+	// A credential header: the rest of the line goes.
+	secretHeaderRE = regexp.MustCompile(`(?i)\b(authorization|proxy-authorization|x-api-key|set-cookie|cookie)\s*:[^\r\n]*`)
+	// A credential field written name=value or "name":"value". A bare
+	// "name: word" is left alone, since prose such as "token: expired" is the
+	// useful part of a message.
+	secretFieldRE = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|token|password|passwd|secret)\b((?:["']\s*:\s*["']?)|(?:\s*=\s*["']?))[^\s"',;&<>]+`)
+)
+
+// redactFreeText removes credentials that RedactSecrets cannot see because
+// they are not part of a URL.
+func redactFreeText(s string) string {
+	s = secretHeaderRE.ReplaceAllString(s, "${1}: REDACTED")
+	return secretFieldRE.ReplaceAllString(s, "${1}${2}REDACTED")
+}
+
 // upstreamDetail reduces text that came from another service (a download
 // client, Prowlarr) to something safe to show: credentials redacted, the first
 // line only, at most upstreamDetailMax bytes. Upstream bodies can be HTML
 // error pages or stack traces, and a first line is enough for an operator to
 // see what the service objected to.
 func upstreamDetail(msg string) string {
-	msg = httpsec.RedactSecrets(msg)
+	msg = redactFreeText(httpsec.RedactSecrets(msg))
 	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
 		msg = msg[:i]
 	}

@@ -611,9 +611,19 @@ func (r *UserRepo) SetRole(ctx context.Context, id int64, role string) error {
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET role=?, updated_at=? WHERE id=?", role, time.Now().UTC(), id); err != nil {
+	res, err := tx.ExecContext(ctx,
+		"UPDATE users SET role=?, updated_at=? WHERE id=?", role, time.Now().UTC(), id)
+	if err != nil {
 		return err
+	}
+	// Promoting to admin skips the lookup above, so an unknown id shows up
+	// here as an update that touched nothing.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
 	}
 	return tx.Commit()
 }

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -413,14 +415,17 @@ func (h *DownloadClientHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // side, so it is a 502 rather than a 400 about the request. The operator still
 // needs to know what to fix, so the message is not generic:
 //
-//   - a network failure (refused, timed out) gets Bindery's own hint for it,
-//     with no URL, since the error text embeds the full request URL;
+//   - a network failure (refused, timed out, no such container) names the
+//     client and the host:port the operator configured, plus Bindery's own hint
+//     for the failure. The error text is not used, since it embeds the full
+//     request URL and is long enough to push the hint past the length cap;
 //   - anything else is what the client said, reduced by upstreamDetail to its
 //     first line, redacted and capped. A client's error page can hold anything.
-func writeProbeError(w http.ResponseWriter, r *http.Request, err error) {
+func writeProbeError(w http.ResponseWriter, r *http.Request, client *models.DownloadClient, err error) {
 	if hint := nethint.ForErr(err); hint != "" {
 		slog.Warn("download client test: unreachable", "method", r.Method, "path", r.URL.Path, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach the download client" + hint})
+		msg := "could not reach " + downloader.ClientTypeName(client.Type) + " at " + net.JoinHostPort(client.Host, strconv.Itoa(client.Port)) + hint
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": msg})
 		return
 	}
 	writeUpstreamDetail(w, r, http.StatusBadGateway, err.Error(), err)
@@ -450,7 +455,7 @@ func (h *DownloadClientHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := downloader.TestClient(r.Context(), client); err != nil {
-		writeProbeError(w, r, err)
+		writeProbeError(w, r, client, err)
 		return
 	}
 	health := h.refreshClientHealth(r.Context(), client)
@@ -506,7 +511,7 @@ func (h *DownloadClientHandler) TestConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := downloader.TestClient(r.Context(), &c); err != nil {
-		writeProbeError(w, r, err)
+		writeProbeError(w, r, &c, err)
 		return
 	}
 	pathVis := downloader.CheckCompletedPathVisibility(r.Context(), &c, h.downloadDir, h.audiobookDownloadDir, h.downloadPathRemap)
