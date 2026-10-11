@@ -98,6 +98,13 @@ func TestParseRecord_DropsWhatIsNotABook(t *testing.T) {
 		{"printed music", record(t, "     ncm  22        450 ", title), false},
 		{"spoken word content type", record(t, "     a    22        450 ", title+df("181", "c", "spw", "2", "rdacontent")), false},
 		{"periodical issue", record(t, bookLeader, title+df("461", "t", "J'aime lire", "x", "0399-4600", "v", "398")), false},
+		// A serial's own title record (leader position 7 "s") carries no 461
+		// link, and doctype "a" includes periodicals: a search for "Le Monde
+		// diplomatique" came back as ten such records, all read as books.
+		{"serial title record", record(t, "     cas  22        450 ", df("011", "a", "0026-9395")+df("200", "a", "Le Monde diplomatique")+df("210", "a", "Paris", "c", "Le Monde", "d", "1954-")), false},
+		{"integrating resource", record(t, "     nai  22        450 ", df("200", "a", "Encyclopédie en ligne")), false},
+		{"collection of monographs", record(t, "     nac  22        450 ", title), true},
+		{"component part", record(t, "     naa  22        450 ", title), true},
 		{"no title", record(t, bookLeader, df("010", "a", "978-2-07-062897-1")), false},
 	}
 	for _, tc := range cases {

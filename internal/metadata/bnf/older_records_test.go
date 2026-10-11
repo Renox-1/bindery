@@ -61,9 +61,56 @@ func TestSplitTitleStatement(t *testing.T) {
 		{"M. Ripois et la Némésis", "M. Ripois et la Némésis", ""},
 	}
 	for _, tc := range cases {
-		title, original := splitTitleStatement(tc.in)
+		title, original := splitTitleStatement(tc.in, nil)
 		if title != tc.title || original != tc.original {
 			t.Errorf("splitTitleStatement(%q) = %q, %q; want %q, %q", tc.in, title, original, tc.title, tc.original)
 		}
+	}
+}
+
+// English and French ", by" / ", par" statements of responsibility are cut
+// only when what follows names one of the record's people or is a plain
+// responsibility cue, so a title that merely contains ", by" keeps it. The
+// first four inputs are 200 $a values from real BnF records.
+func TestSplitTitleStatement_ResponsibilityAfterComma(t *testing.T) {
+	carroll := []string{"Carroll"}
+	cases := []struct {
+		name, in string
+		names    []string
+		title    string
+		original string
+	}{
+		{"by the record's author", "Sylvie and Bruno, by Lewis Carroll", carroll, "Sylvie and Bruno", ""},
+		{"by, then an illustrator statement", "Phantasmagoria and other poems, by Lewis Carroll. With illustrations by Arthur B. Frost", carroll, "Phantasmagoria and other poems", ""},
+		{"question marks and spacing kept", "Rhyme ? and reason ?, by Lewis Carroll", carroll, "Rhyme ? and reason ?", ""},
+		{"leading name flagged sic", `L. Carrol ["sic"]. Alice au pays des merveilles . Illustrations de J. Sornani...`, carroll, "Alice au pays des merveilles", ""},
+		{"par and the record's author", "Le Rouge et le Noir, par Stendhal", []string{"Stendhal"}, "Le Rouge et le Noir", ""},
+		{"case insensitive", "Sylvie and Bruno, BY LEWIS CARROLL", carroll, "Sylvie and Bruno", ""},
+		{"responsibility cue without a name", "Sylvie and Bruno concluded, by the author of Alice in Wonderland", nil, "Sylvie and Bruno concluded", ""},
+		{"title containing , by", "Ruby, by Moonlight", carroll, "Ruby, by Moonlight", ""},
+		{"a name inside a word is not the name", "Ruby, by Moonlight", []string{"Moon"}, "Ruby, by Moonlight", ""},
+		{"no people on the record", "Sylvie and Bruno, by Lewis Carroll", nil, "Sylvie and Bruno, by Lewis Carroll", ""},
+		{"sic is never an original title", `Ce que j'ai vu ["sic"]. Souvenirs`, []string{"Dupont"}, "Ce que j'ai vu", ""},
+		{"sic alongside a real original", `Alice au pays des merveilles [sic] ["Alice's adventures in wonderland"]`, carroll, "Alice au pays des merveilles", "Alice's adventures in wonderland"},
+	}
+	for _, tc := range cases {
+		title, original := splitTitleStatement(tc.in, tc.names)
+		if title != tc.title || original != tc.original {
+			t.Errorf("%s: splitTitleStatement(%q) = %q, %q; want %q, %q", tc.name, tc.in, title, original, tc.title, tc.original)
+		}
+	}
+}
+
+// The record the review found: its title became "L. Carrol" and its original
+// title "sic".
+func TestParseRecord_SicStatement(t *testing.T) {
+	ed, ok := parseRecord(record(t, bookLeader,
+		df("200", "a", `L. Carrol ["sic"]. Alice au pays des merveilles . Illustrations de J. Sornani...`, "b", "Texte imprimé")+
+			df("700", "3", "11885918", "a", "Carroll", "b", "Lewis", "4", "070")))
+	if !ok {
+		t.Fatal("not parsed")
+	}
+	if ed.title != "Alice au pays des merveilles" || ed.originalTitle != "" {
+		t.Errorf("title = %q original = %q, want Alice au pays des merveilles and no original", ed.title, ed.originalTitle)
 	}
 }

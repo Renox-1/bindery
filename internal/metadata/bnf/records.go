@@ -9,6 +9,7 @@ import (
 
 	"github.com/vavallee/bindery/internal/isbnutil"
 	"github.com/vavallee/bindery/internal/models"
+	"github.com/vavallee/bindery/internal/textutil"
 )
 
 // arkNameRe matches the name part of a BnF catalogue ARK: "cb", eight or nine
@@ -94,17 +95,22 @@ func parseRecord(r marcRecord) (edition, bool) {
 	if ark == "" {
 		return edition{}, false
 	}
-	title := recordTitle(r)
+	credits := recordCredits(r)
+	surnames := make([]string, 0, len(credits))
+	for _, c := range credits {
+		surnames = append(surnames, c.surname)
+	}
+	title := recordTitle(r, surnames)
 	if title == "" {
 		return edition{}, false
 	}
 	ed := edition{
 		ark:           ark,
 		title:         title,
-		originalTitle: originalTitle(r, title),
+		originalTitle: originalTitle(r, title, surnames),
 		language:      models.NormalizeLanguageCode(r.first("101", "a")),
 		description:   recordDescription(r),
-		credits:       recordCredits(r),
+		credits:       credits,
 	}
 	if f := r.first("100", "a"); len(f) >= 8 && allDigits(f[:8]) {
 		ed.entered = f[:8]
@@ -132,6 +138,12 @@ func parseRecord(r marcRecord) (edition, bool) {
 //     blank is tolerated because records converted from BnF's new model in
 //     2026 leave the leader positions empty; anything else (music, sound
 //     recordings, images, maps) is dropped.
+//   - Leader position 7 is the bibliographic level. A serial ("s") or an
+//     integrating resource ("i", a loose leaf or a website) is not a book,
+//     and bib.doctype "a" does include periodicals: a search for "Le Monde
+//     diplomatique" returned ten serial title records. Monographs ("m"),
+//     collections ("c"), component parts ("a") and the blank of a 2026
+//     record are kept.
 //   - An RDA content type (181 $c), when present, must include "txt".
 //   - A record linked to a periodical by ISSN (461 $x) is an issue of a
 //     magazine, not a book.
@@ -143,6 +155,12 @@ func isBookRecord(r marcRecord) bool {
 		switch r.Leader[6] {
 		case 'a', ' ':
 		default:
+			return false
+		}
+	}
+	if len(r.Leader) > 7 {
+		switch r.Leader[7] {
+		case 's', 'i':
 			return false
 		}
 	}
@@ -179,8 +197,9 @@ func recordARK(r marcRecord) string {
 // recordTitle is the title proper (200 $a). A volume catalogued as a part of
 // a larger work carries that work's name in $a and its own title in $i, so
 // the part title wins: otherwise every volume of a multi-part work would be
-// named after the whole.
-func recordTitle(r marcRecord) string {
+// named after the whole. surnames are the record's people (7XX $a), which
+// tell a statement of responsibility from a title (splitTitleStatement).
+func recordTitle(r marcRecord, surnames []string) string {
 	fs := r.fields("200")
 	if len(fs) == 0 {
 		return ""
@@ -188,7 +207,7 @@ func recordTitle(r marcRecord) string {
 	if part := cleanTitle(fs[0].first("i")); part != "" {
 		return part
 	}
-	title, _ := splitTitleStatement(fs[0].first("a"))
+	title, _ := splitTitleStatement(fs[0].first("a"), surnames)
 	return title
 }
 
@@ -197,12 +216,12 @@ func recordTitle(r marcRecord) string {
 // uniform title (500 $a) when it differs from the record's own title. BnF's
 // 2026 records give a French uniform title for a French edition, which is
 // not an original title, so that case is left out.
-func originalTitle(r marcRecord, title string) string {
+func originalTitle(r marcRecord, title string, surnames []string) string {
 	if t := cleanTitle(r.first("454", "t")); t != "" {
 		return t
 	}
 	if fs := r.fields("200"); len(fs) > 0 {
-		if _, orig := splitTitleStatement(fs[0].first("a")); orig != "" {
+		if _, orig := splitTitleStatement(fs[0].first("a"), surnames); orig != "" {
 			return orig
 		}
 	}
@@ -221,21 +240,107 @@ func originalTitle(r marcRecord, title string) string {
 // opens a statement of responsibility.
 var statementCutRe = regexp.MustCompile(`(?i)\s\[|\s/\s|\s,\s|\.\s+(?:traduit|traduction|trad\.|adapt|illustr|préf|texte|version|par\s|d'après|introd|notes?\s|avec\s|dessins|images)`)
 
+// byStatementRe finds a ", by" or ", par" with no space before the comma:
+// "Sylvie and Bruno, by Lewis Carroll". Unlike " , " this is also how a
+// title can read ("Ruby, by Moonlight"), so splitTitleStatement cuts there
+// only when what follows names one of the record's people or is a plain
+// responsibility cue (respCueRe).
+var byStatementRe = regexp.MustCompile(`(?i),\s+(?:by|par)\s+`)
+
+// respCueRe is a statement of responsibility that names nobody: "by the
+// author of Alice in Wonderland", "par l'auteur de ...".
+var respCueRe = regexp.MustCompile(`(?i)^(?:the\s+author\s+of\b|l['’]auteur\s+d)`)
+
 // bracketedOriginalRe reads a bracketed original title: ["Alice in Wonderland"].
 var bracketedOriginalRe = regexp.MustCompile(`\[\s*"([^"\]]+)"\s*\]`)
+
+// leadingSicRe reads a title statement that opens with a name the
+// cataloguer transcribed as printed and flagged: `L. Carrol ["sic"]. Alice au
+// pays des merveilles`. Group 1 is the name, group 2 the rest.
+var leadingSicRe = regexp.MustCompile(`(?i)^(.{1,60}?)\s*\[\s*"?\s*sic\s*"?\s*\]\s*\.\s+(\S.*)$`)
 
 // splitTitleStatement returns the title proper of a 200 $a and, when the
 // statement carries one in brackets, the original title. A modern record's
 // $a is only the title and comes back unchanged.
-func splitTitleStatement(s string) (title, original string) {
+//
+// surnames are the record's people. A ", by <name>" is cut only when the
+// name is one of theirs, and a leading name flagged [sic] is dropped only
+// when it is a misspelling of one of theirs, so a title is never cut on
+// punctuation alone. A bracketed "sic" is the cataloguer's marker, never an
+// original title.
+func splitTitleStatement(s string, surnames []string) (title, original string) {
 	s = cleanTitle(s)
-	if m := bracketedOriginalRe.FindStringSubmatch(s); m != nil {
-		original = cleanTitle(m[1])
+	if m := leadingSicRe.FindStringSubmatch(s); m != nil && namesSomeone(m[1], surnames, true) {
+		s = m[2]
 	}
+	for _, m := range bracketedOriginalRe.FindAllStringSubmatch(s, -1) {
+		if o := cleanTitle(m[1]); o != "" && !strings.EqualFold(o, "sic") {
+			original = o
+			break
+		}
+	}
+	cut := -1
 	if loc := statementCutRe.FindStringIndex(s); loc != nil && loc[0] > 0 {
-		s = cleanTitle(s[:loc[0]])
+		cut = loc[0]
+	}
+	for _, loc := range byStatementRe.FindAllStringIndex(s, -1) {
+		if loc[0] == 0 || (cut >= 0 && loc[0] >= cut) {
+			continue
+		}
+		if follow := s[loc[1]:]; respCueRe.MatchString(follow) || namesSomeone(follow, surnames, false) {
+			cut = loc[0]
+			break
+		}
+	}
+	if cut > 0 {
+		s = cleanTitle(s[:cut])
 	}
 	return s, original
+}
+
+// namesSomeone reports whether text names one of surnames: every word of a
+// surname appears as a whole word of text, ignoring case and accents. With
+// misspelt set, a word of four letters or more that a surname word starts
+// with, or that starts with one, also counts: the names a cataloguer flags
+// [sic] are misspellings ("L. Carrol" for Carroll).
+func namesSomeone(text string, surnames []string, misspelt bool) bool {
+	words := foldWords(text)
+	for _, surname := range surnames {
+		sw := foldWords(surname)
+		if len(sw) == 0 {
+			continue
+		}
+		all := true
+		for _, w := range sw {
+			if !hasWord(words, w, misspelt) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWord(words []string, w string, misspelt bool) bool {
+	for _, t := range words {
+		if t == w {
+			return true
+		}
+		if misspelt && len(t) >= 4 && len(w) >= 4 && (strings.HasPrefix(w, t) || strings.HasPrefix(t, w)) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldWords splits s into case and accent folded words.
+func foldWords(s string) []string {
+	return strings.FieldsFunc(textutil.FoldForSearch(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
 }
 
 // cleanTitle strips the non-sorting markers some UNIMARC exports put around a
