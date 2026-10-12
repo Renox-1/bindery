@@ -126,34 +126,31 @@ func (r *BookRepo) WithTx(tx *sql.Tx) *BookRepo {
 	return &clone
 }
 
-// bookCTE is a WITH clause that materialises the first book_files row per
-// format for every book. Using CTEs + LEFT JOINs avoids the correlated
-// subqueries that previously fired 2 N extra SQLite queries per book list.
-const bookCTE = `WITH first_ebook AS (
-	SELECT book_id, path FROM book_files
-	WHERE format = 'ebook'
-	GROUP BY book_id HAVING id = MIN(id)
-),
-first_audiobook AS (
-	SELECT book_id, path FROM book_files
-	WHERE format = 'audiobook'
-	GROUP BY book_id HAVING id = MIN(id)
-)`
+// bookCTE is the WITH clause that used to materialise the first book_files row
+// per format for every book. It is now empty: the CTE was built over the whole
+// book_files table on every query, so a single GetByID paid for the whole
+// table (about 50 ms at 30k files) and a 50 row list page for every row of
+// every book. The first file paths are now looked up per book, only when the
+// stored books.ebook_file_path / audiobook_file_path column is empty (see
+// bookColumns), by correlated subqueries bound to book_id on index
+// idx_book_files_format_book (format, book_id, id). The constant stays so the
+// call sites that concatenate it keep compiling.
+const bookCTE = ""
 
 // bookColumns is the canonical column list for book SELECT queries.
 //
 // ebook_file_path and audiobook_file_path read the stored column first and
-// fall back to the first_ebook / first_audiobook CTE. That order is load
+// fall back to the first book_files row of that format. That order is load
 // bearing (#2186). The column is not user-writable and is not stale: every
 // mutation of book_files goes through refreshBookStatus, which recomputes it
-// from the rows and writes it back. The CTE cannot do the same job, because
-// choosing the right row means asking the filesystem which paths still
-// resolve and SQL cannot stat. Reading the CTE first therefore overrode the
+// from the rows and writes it back. The file rows cannot do the same job,
+// because choosing the right row means asking the filesystem which paths
+// still resolve and SQL cannot stat. Reading the file rows first therefore overrode the
 // answer refreshBookStatus had already worked out, and a book whose file had
 // moved kept rendering the dead path.
 //
-// The CTE remains the fallback for the shape migration 028 leaves behind: a
-// book backfilled from the legacy untyped file_path column got an 'ebook'
+// The correlated subqueries remain the fallback for the shape migration 028
+// leaves behind: a book backfilled from the legacy untyped file_path column got an 'ebook'
 // book_files row while books.ebook_file_path stayed empty, and it also covers
 // any book whose column was never written.
 //
@@ -170,19 +167,18 @@ const bookColumns = `books.id, books.foreign_id, books.author_id, books.title, b
 	books.media_type, books.narrator, books.duration_seconds, books.asin,
 	books.calibre_id, books.metadata_provider, books.last_metadata_refresh_at,
 	books.created_at, books.updated_at, CAST(books.updated_at AS TEXT),
-	COALESCE(NULLIF(books.ebook_file_path, ''), fe.path, ''),
-	COALESCE(NULLIF(books.audiobook_file_path, ''), fa.path, ''),
+	COALESCE(NULLIF(books.ebook_file_path, ''),
+		(SELECT bf.path FROM book_files bf WHERE bf.format = 'ebook' AND bf.book_id = books.id ORDER BY bf.id LIMIT 1), ''),
+	COALESCE(NULLIF(books.audiobook_file_path, ''),
+		(SELECT bf.path FROM book_files bf WHERE bf.format = 'audiobook' AND bf.book_id = books.id ORDER BY bf.id LIMIT 1), ''),
 	books.excluded, COALESCE(books.dedup_key, ''),
 	au.id, au.foreign_id, au.name, au.sort_name,
 	COALESCE(books.owner_user_id, 0),
 	COALESCE(books.locked_fields, '[]')`
 
-// bookJoins are the LEFT JOINs that attach the first_ebook and first_audiobook
-// CTE results plus the author row to the books table. Must follow the FROM
-// books clause.
-const bookJoins = `LEFT JOIN first_ebook    fe ON fe.book_id = books.id
-LEFT JOIN first_audiobook fa ON fa.book_id = books.id
-LEFT JOIN authors         au ON au.id = books.author_id`
+// bookJoins is the LEFT JOIN that attaches the author row to the books table.
+// Must follow the FROM books clause.
+const bookJoins = `LEFT JOIN authors au ON au.id = books.author_id`
 
 func (r *BookRepo) List(ctx context.Context) ([]models.Book, error) {
 	return r.query(ctx, bookCTE+" SELECT "+bookColumns+" FROM books "+bookJoins+" WHERE excluded = 0 ORDER BY books.sort_key, sort_title", nil)
