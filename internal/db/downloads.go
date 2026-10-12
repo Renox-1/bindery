@@ -901,23 +901,34 @@ func (r *DownloadRepo) HasImportInFlight(ctx context.Context, bookID, userID int
 	return n > 0, nil
 }
 
-// terminalAge is the SQL for the moment the row at alias reached the state
-// retention judges it by: imported_at for an import, dead_at for a failure,
-// then the rest of the chain for a row that predates those stamps (the same
-// idea as deadAtSQL).
-func terminalAge(alias string) string {
-	return "COALESCE(" + alias + ".imported_at, " + alias + ".dead_at, " + alias + ".completed_at, " +
-		alias + ".grabbed_at, " + alias + ".added_at)"
-}
-
-// trimmable matches a row retention may delete: imported or failed, and older
-// than the bound time. importBlocked is deliberately left out even though
-// nothing polls it: it holds import_path, the only source the Match to book
-// action imports from, and it is waiting for a person. Every non terminal
-// state, importFailed included, is live work.
-func trimmable(alias string) string {
-	return alias + ".status IN ('imported','failed') AND " + terminalAge(alias) + " < ?"
-}
+// trimTerminalSQL deletes one batch of rows retention may remove. Its two
+// date arguments are the cutoff, then the batch limit follows.
+//
+// A trimmable row is imported or failed and older than the cutoff, where age is
+// imported_at for an import, dead_at for a failure, then the rest of the chain
+// for a row that predates those stamps (the same idea as deadAtSQL).
+// importBlocked is deliberately left out even though nothing polls it: it holds
+// import_path, the only source the Match to book action imports from, and it
+// is waiting for a person. Every non terminal state, importFailed included, is
+// live work.
+//
+// The NOT EXISTS keeps a row while another row that is not itself trimmable
+// names the same client job. The statement is a literal, with no pieces joined
+// in, so nothing from a caller can reach the SQL text.
+const trimTerminalSQL = `
+	DELETE FROM downloads WHERE id IN (
+		SELECT d.id FROM downloads d
+		WHERE d.status IN ('imported','failed')
+		  AND COALESCE(d.imported_at, d.dead_at, d.completed_at, d.grabbed_at, d.added_at) < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM downloads o
+			WHERE o.id <> d.id
+			  AND ((d.torrent_id IS NOT NULL AND d.torrent_id <> '' AND o.torrent_id = d.torrent_id)
+			    OR (d.sabnzbd_nzo_id IS NOT NULL AND d.sabnzbd_nzo_id <> '' AND o.sabnzbd_nzo_id = d.sabnzbd_nzo_id))
+			  AND NOT (o.status IN ('imported','failed')
+			    AND COALESCE(o.imported_at, o.dead_at, o.completed_at, o.grabbed_at, o.added_at) < ?)
+		  )
+		LIMIT ?)`
 
 // TrimTerminal deletes imported and failed download rows that reached that
 // state before cutoff, in batches of batchSize with pause between them, and
@@ -948,18 +959,7 @@ func (r *DownloadRepo) TrimTerminal(ctx context.Context, cutoff time.Time, batch
 		batchSize = 500
 	}
 	cut := cutoff.UTC()
-	query := `
-		DELETE FROM downloads WHERE id IN (
-			SELECT d.id FROM downloads d
-			WHERE ` + trimmable("d") + `
-			  AND NOT EXISTS (
-				SELECT 1 FROM downloads o
-				WHERE o.id <> d.id
-				  AND ((d.torrent_id IS NOT NULL AND d.torrent_id <> '' AND o.torrent_id = d.torrent_id)
-				    OR (d.sabnzbd_nzo_id IS NOT NULL AND d.sabnzbd_nzo_id <> '' AND o.sabnzbd_nzo_id = d.sabnzbd_nzo_id))
-				  AND NOT (` + trimmable("o") + `)
-			)
-			LIMIT ?)`
+	query := trimTerminalSQL
 	var total int64
 	for {
 		res, err := r.db.ExecContext(ctx, query, cut, cut, batchSize)

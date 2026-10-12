@@ -7,7 +7,7 @@ import type { Book } from '../api/client'
 
 vi.mock('../api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('../api/client')>()
-  return { ...actual, api: { ...actual.api, listWanted: vi.fn() } }
+  return { ...actual, api: { ...actual.api, listWantedPage: vi.fn() } }
 })
 
 vi.mock('react-i18next', () => ({
@@ -40,7 +40,7 @@ const book = {
 // a second line under the title.
 describe('WantedPage on a phone', () => {
   beforeEach(() => {
-    vi.mocked(api.listWanted).mockResolvedValue([book])
+    vi.mocked(api.listWantedPage).mockResolvedValue({ items: [book], total: 1, limit: 50, offset: 0 })
   })
 
   it('uses a three column row below sm and the five column row from sm', async () => {
