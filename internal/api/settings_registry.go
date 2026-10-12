@@ -347,6 +347,31 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 	{
+		Key: "backfill.asin_case_rev", Type: SettingTypeInt, Default: "0",
+		Description: "Revision of the ASIN case fold normalizer the startup backfill last ran at (isbnutil.NormalizeASINRev). Bindery compares it with the current revision at every start and re-runs the backfill only when they differ. Removing the row is harmless but makes the next start repeat the backfill once.",
+		State:       SettingStateInternal,
+	},
+	{
+		Key: "backfill.book_sort_key_rev", Type: SettingTypeInt, Default: "0",
+		Description: "Revision of the book sort key normalizer the startup backfill last ran at (the book sort key normalizer). Bindery compares it with the current revision at every start and re-runs the backfill only when they differ. Removing the row is harmless but makes the next start repeat the backfill once.",
+		State:       SettingStateInternal,
+	},
+	{
+		Key: "backfill.dedup_key_rev", Type: SettingTypeInt, Default: "0",
+		Description: "Revision of the book dedup key normalizer the startup backfill last ran at (CanonicalDedupKeyRev). Bindery compares it with the current revision at every start and re-runs the backfill only when they differ. Removing the row is harmless but makes the next start repeat the backfill once.",
+		State:       SettingStateInternal,
+	},
+	{
+		Key: "backfill.search_key_rev", Type: SettingTypeInt, Default: "0",
+		Description: "Revision of the search key normalizer the startup backfill last ran at (the search key normalizer). Bindery compares it with the current revision at every start and re-runs the backfill only when they differ. Removing the row is harmless but makes the next start repeat the backfill once.",
+		State:       SettingStateInternal,
+	},
+	{
+		Key: "backfill.sort_key_rev", Type: SettingTypeInt, Default: "0",
+		Description: "Revision of the author sort key normalizer the startup backfill last ran at (the author sort key normalizer). Bindery compares it with the current revision at every start and re-runs the backfill only when they differ. Removing the row is harmless but makes the next start repeat the backfill once.",
+		State:       SettingStateInternal,
+	},
+	{
 		Key: "calibre.last_import_at", Type: SettingTypeString, Default: "",
 		Description: "RFC3339 timestamp of the last Calibre library import, written by the importer and shown on the Calibre settings tab.",
 		State:       SettingStateInternal,

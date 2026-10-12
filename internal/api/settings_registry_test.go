@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vavallee/bindery/internal/abs"
+	"github.com/vavallee/bindery/internal/db"
 )
 
 // TestSettingDescriptors_WellFormed checks that every descriptor describes
@@ -646,6 +647,28 @@ func TestSettingDescriptorsCoverTelemetryFunnelKeys(t *testing.T) {
 		}
 		if d.State != SettingStateInternal {
 			t.Errorf("%s state = %q, want %q: Bindery writes it, an operator does not", key, d.State, SettingStateInternal)
+		}
+	}
+}
+
+// TestSettingDescriptorsCoverBackfillRevisionKeys keeps the startup backfill
+// markers described. They are written and read by internal/db, which this
+// package's source scan does not look at, so without this test a new backfill
+// would appear on the Advanced tab as an unrecognised key that "nothing reads".
+func TestSettingDescriptorsCoverBackfillRevisionKeys(t *testing.T) {
+	keys := db.BackfillRevisionKeys()
+	if len(keys) < 5 {
+		t.Fatalf("db.BackfillRevisionKeys returned %d keys, want at least 5", len(keys))
+	}
+	for _, key := range keys {
+		if !IsKnownSettingKey(key) {
+			t.Errorf("%s is a backfill revision marker with no descriptor in settings_registry.go", key)
+			continue
+		}
+		for _, d := range SettingDescriptors() {
+			if d.Key == key && d.State != SettingStateInternal {
+				t.Errorf("%s: state %q, want internal", key, d.State)
+			}
 		}
 	}
 }

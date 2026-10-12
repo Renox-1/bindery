@@ -517,6 +517,21 @@ const (
 	backfillRevKeyASINCase     = "backfill.asin_case_rev"
 )
 
+// BackfillRevisionKeys lists the settings keys that hold the normalizer
+// revision each startup backfill last ran at. The settings registry in
+// internal/api describes each one as Bindery's own bookkeeping, and a test there
+// fails when a key in this list has no descriptor, so a new backfill cannot
+// turn up on the Advanced tab as an unrecognised key.
+func BackfillRevisionKeys() []string {
+	return []string{
+		backfillRevKeyDedup,
+		backfillRevKeySortKeys,
+		backfillRevKeyBookSortKeys,
+		backfillRevKeySearchKeys,
+		backfillRevKeyASINCase,
+	}
+}
+
 // backfillRevisionCurrent reports whether the stored marker for key already
 // equals want, i.e. whether the backfill that owns it can be skipped (#2346).
 //
