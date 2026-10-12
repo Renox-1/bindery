@@ -2337,6 +2337,19 @@ func (h *AuthorHandler) runCatalogueSync(ctx context.Context, author *models.Aut
 		editionsByForeignID = make(map[string][]models.Edition, len(prefetch))
 		var mu sync.Mutex
 		concurrency.RunBounded(ctx, prefetch, authorAutoSearchConcurrency, func(ctx context.Context, b models.Book) {
+			// BnF works come from the author catalogue with every edition
+			// already attached, and BnF's per work editions lookup is a full
+			// GetBook: up to four requests at one a second, so a large
+			// author cost minutes. The attached editions are the same
+			// records, so they are the evidence (as in catalogue
+			// reconciliation). A work with none attached still goes to the
+			// lookup.
+			if bookProvider(&b) == "bnf" && len(b.Editions) > 0 {
+				mu.Lock()
+				editionsByForeignID[b.ForeignID] = b.Editions
+				mu.Unlock()
+				return
+			}
 			editions, err := h.meta.GetEditions(ctx, b.ForeignID)
 			if err != nil {
 				slog.Debug("edition lookup failed while checking MinPages/SkipMissingISBN; not enforcing for this work",
