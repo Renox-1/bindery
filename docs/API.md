@@ -630,7 +630,8 @@ DELETE /api/v1/queue/{id}                         remove (also from the download
 POST   /api/v1/queue/bulk-delete                  remove many; {"ids":[..],"deleteFiles":false,"unmonitorBooks":false,"removeFromClient":true}
 
 GET    /api/v1/pending                            grabs awaiting delay-profile clearance
-POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately
+POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately; answers like
+                                                  /queue/grab (400 "no_download_client", 502 send failure)
 
 GET    /api/v1/queue/manual-import/lookup         parse + catalogue-match one path (admin)
 GET    /api/v1/queue/manual-import/scan           enumerate + match book units under a folder (admin)
