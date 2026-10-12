@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/dirperm"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
 )
@@ -564,7 +565,7 @@ func firstGenre(genres []string) string {
 // This handles cross-filesystem moves (e.g., NFS download dir → NFS library).
 func MoveFile(src, dst string) error {
 	// Ensure destination directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
@@ -728,7 +729,7 @@ func moveDir(ctx context.Context, src, dst string, allowRename bool) error {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
@@ -790,7 +791,7 @@ func MoveDirMergeCtx(ctx context.Context, src, dst string) (skipped []string, er
 // import mode counterpart to MoveFile. The source is left intact so that
 // torrent clients continue seeding from the original download location.
 func CopyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	return copyFile(src, dst)
@@ -804,7 +805,7 @@ func CopyFile(src, dst string) error {
 // which would break seeding. The cost is extra disk for the imported copy.
 // Non-EXDEV errors (permissions, missing source) are returned as-is.
 func HardlinkFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	if err := osLink(src, dst); err != nil {
@@ -867,7 +868,7 @@ func copyDirPublicCtx(ctx context.Context, src, dst string) error {
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 	if err := copyDirContext(ctx, src, dst); err != nil {
@@ -918,7 +919,7 @@ func mergeCopyDirContext(ctx context.Context, srcDir, dstDir string) (skipped []
 	if dirContains(srcDir, dstDir) {
 		return nil, fmt.Errorf("%w: %s is inside %s", ErrDestInsideSource, dstDir, srcDir)
 	}
-	if err := os.MkdirAll(dstDir, 0o750); err != nil {
+	if err := os.MkdirAll(dstDir, dirperm.Library()); err != nil {
 		return nil, err
 	}
 	srcRoot, err := os.OpenRoot(srcDir)
@@ -973,7 +974,7 @@ func mergeCopyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel stri
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
-			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
+			if err := dstRoot.Mkdir(child, dirperm.Library()); err != nil && !os.IsExist(err) {
 				return err
 			}
 			if err := mergeCopyDirRooted(ctx, srcRoot, dstRoot, child, acc); err != nil {
@@ -1011,7 +1012,7 @@ func HardlinkDir(src, dst string) error {
 	if _, err := os.Stat(dst); err == nil {
 		return fmt.Errorf("destination already exists: %s", dst)
 	}
-	if err := os.MkdirAll(dst, 0o750); err != nil {
+	if err := os.MkdirAll(dst, dirperm.Library()); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
 
@@ -1051,7 +1052,7 @@ func HardlinkDirMerge(src, dst string) (skipped []string, err error) {
 	if err := checkDestNotInsideSource("hardlink", src, dst); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dst, 0o750); err != nil {
+	if err := os.MkdirAll(dst, dirperm.Library()); err != nil {
 		return nil, fmt.Errorf("create dest dir: %w", err)
 	}
 
@@ -1093,7 +1094,7 @@ func mergeHardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string, acc *mergeSki
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
-			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
+			if err := dstRoot.Mkdir(child, dirperm.Library()); err != nil && !os.IsExist(err) {
 				return err
 			}
 			if err := mergeHardlinkDirRooted(srcRoot, dstRoot, child, acc); err != nil {
@@ -1139,7 +1140,7 @@ func hardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
-			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
+			if err := dstRoot.Mkdir(child, dirperm.Library()); err != nil && !os.IsExist(err) {
 				return err
 			}
 			if err := hardlinkDirRooted(srcRoot, dstRoot, child); err != nil {
@@ -1185,7 +1186,7 @@ func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
 	if dirContains(srcDir, dstDir) {
 		return fmt.Errorf("%w: %s is inside %s", ErrDestInsideSource, dstDir, srcDir)
 	}
-	if err := os.MkdirAll(dstDir, 0o750); err != nil {
+	if err := os.MkdirAll(dstDir, dirperm.Library()); err != nil {
 		return err
 	}
 	srcRoot, err := os.OpenRoot(srcDir)
@@ -1228,7 +1229,7 @@ func copyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string) e
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
-			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
+			if err := dstRoot.Mkdir(child, dirperm.Library()); err != nil && !os.IsExist(err) {
 				return err
 			}
 			if err := copyDirRooted(ctx, srcRoot, dstRoot, child); err != nil {
@@ -1369,7 +1370,7 @@ var osLink = os.Link
 // MoveFileCtx is like MoveFile but returns ctx.Err() if the context is
 // cancelled during the cross-filesystem copy phase.
 func MoveFileCtx(ctx context.Context, src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
@@ -1400,7 +1401,7 @@ func MoveFileCtx(ctx context.Context, src, dst string) error {
 // CopyFileCtx is like CopyFile but returns ctx.Err() if the context is
 // cancelled during the copy.
 func CopyFileCtx(ctx context.Context, src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 	return copyFileCtx(ctx, src, dst)
@@ -1445,7 +1446,7 @@ func CopyFileCtx(ctx context.Context, src, dst string) error {
 // The mode strings match those used by scanner.go: "hardlink", "copy",
 // and the default (anything else) is move.
 func StagedImport(ctx context.Context, mode, src, dst string) (stagedPath string, commit func() error, rollback func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return "", nil, nil, fmt.Errorf("create dir: %w", err)
 	}
 	staged := stagingPath(dst)

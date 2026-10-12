@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vavallee/bindery/internal/dirperm"
 )
 
 // audioFlattenExtensions lists the audio extensions that participate in
@@ -204,7 +206,7 @@ func flattenAudiobookDirNamed(ctx context.Context, mode, srcRoot, destDir string
 	if _, statErr := os.Stat(destDir); statErr == nil {
 		return fmt.Errorf("destination already exists: %s", destDir)
 	}
-	if err := os.MkdirAll(destDir, 0o750); err != nil {
+	if err := os.MkdirAll(destDir, dirperm.Library()); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
 

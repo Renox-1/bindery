@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vavallee/bindery/internal/calibre"
+	"github.com/vavallee/bindery/internal/dirperm"
 	"github.com/vavallee/bindery/internal/models"
 )
 
@@ -572,7 +573,7 @@ func (s *Scanner) finishDrop(ctx context.Context, dl *models.Download, layout, l
 // removed first so hardlink (os.Link) doesn't fail on EEXIST and copy stays
 // deterministic.
 func dropPlaceFile(ctx context.Context, src, dst, linkMode string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirperm.Library()); err != nil {
 		return fmt.Errorf("create drop dir: %w", err)
 	}
 	if _, err := os.Lstat(dst); err == nil {
@@ -621,7 +622,7 @@ func (s *Scanner) dropPlaceAudiobook(ctx context.Context, downloadPath string, b
 		if err := checkPerFileCollisions(destDir, bookFiles); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(destDir, 0o750); err != nil {
+		if err := os.MkdirAll(destDir, dirperm.Library()); err != nil {
 			return fmt.Errorf("create drop dir: %w", err)
 		}
 		placed := make([]string, 0, len(bookFiles))

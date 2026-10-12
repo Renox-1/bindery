@@ -1,0 +1,2 @@
+### Added
+- **Configurable library directory mode** (#3207) — `BINDERY_DIR_MODE` sets the mode of the author, book, audiobook, metadata-opf and drop-folder handoff directories the importer creates, from the set `0700`/`0750`/`0755`/`0770`/`0775`/`0777` (default stays `0750`). Useful where storage rewrites client IDs server-side (NFS exports with squash/mapall) or other programs need to read the library.
