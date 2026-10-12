@@ -243,6 +243,7 @@ Bindery is configured through the web UI under **Settings** — indexers, downlo
 | `BINDERY_AUDIOBOOK_DOWNLOAD_DIR` | inherits download dir | Separate watch folder for audiobook downloads |
 | `BINDERY_URL_BASE` | _(empty)_ | Reverse-proxy subpath (e.g. `/bindery`) |
 | `BINDERY_OUTBOUND_PROXY` | _(empty)_ | Route outbound HTTP (indexers, metadata, covers, notifications, telemetry) through an `http`/`https`/`socks5` proxy. LAN/loopback destinations bypass it by default — see [DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables) |
+| `BINDERY_DOWNLOAD_RETENTION_DAYS` | `90` | Days to keep a finished (imported or failed) download row before a scheduled job deletes it; `0` keeps every row. See [DEPLOYMENT.md](docs/DEPLOYMENT.md#environment-variables) before upgrading a long running install |
 | `BINDERY_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn` or `error` |
 | `BINDERY_PUID` / `BINDERY_PGID` | _(unset)_ | Sanity-check assertions for the container UID/GID. They only assert; the distroless image does no runtime user switching, so set the UID with `--user` or Compose's `user:` as well |
 

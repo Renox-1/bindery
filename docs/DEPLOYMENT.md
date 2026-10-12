@@ -217,6 +217,8 @@ The frontend is embedded in the binary via `go:embed` — no separate static-fil
 
 Deleting a book or an author with its files removes only files inside a root folder, `BINDERY_LIBRARY_DIR` or `BINDERY_AUDIOBOOK_DIR`, after resolving symlinks on both sides. A root that is itself a symlink to another volume works, but a symlink inside a root that points outside it is not followed. A path outside every root is skipped with a warning in the log (`path containment: refusing to delete file`) and the database row is still removed. With no root at all every file delete is refused until one is set; a default install cannot reach that state, because `BINDERY_LIBRARY_DIR` defaults to `/books`. A Calibre library that lives outside your roots is not covered by deletes from Bindery, as before.
 
+**Linked author folders.** If an author folder in your library is a symlink to another disk (`/books/Author -> /mnt/disk2/Author`), the file's real location is `/mnt/disk2/Author/...`, which is outside `/books`. Add the target (`/mnt/disk2` or the folder you link to) as an additional root folder (Settings, Root Folders), otherwise deleting a book from Bindery removes the row and leaves its files on disk, with the warning above in the log.
+
 ## Caching and large downloads behind a reverse proxy
 
 The web app's build files under `/assets/` carry a content hash in their name, and Bindery serves them with `Cache-Control: public, max-age=31536000, immutable`. A proxy or CDN in front of Bindery may cache them for as long as it likes, because a new release changes the names. Nothing else is cached this way: `index.html` is `no-store`, and files such as the favicon and the manifest carry no cache headers, so clients fetch them again. If your proxy rewrites `Cache-Control` on `/assets/`, leave the long lifetime alone.
@@ -688,6 +690,12 @@ Death`, #3122), so it is rewritten for every book once, on the first start after
 the upgrade. It runs during startup, before Bindery begins serving, and adds no schema
 migration; on a development machine 100,000 books took about 1.4 seconds. Rows that now share a key are neither merged nor removed: they
 show up together in **Review duplicates** for you to decide.
+
+### Startup work and background changes in v1.42.0
+
+- **Migration 107** adds four indexes (History by event type, pending releases per book, the newest-first downloads list and the quality profile in-use check). They are built once at startup, about half a second on a database with 200,000 history rows.
+- **Finished download rows are trimmed.** The first pass of the retention job runs about six hours after the first start of the new version and deletes every `imported` or `failed` row older than `BINDERY_DOWNLOAD_RETENTION_DAYS` (default 90) in batches. On a long running install that is most of the table. Set the variable to `0` before that first start to keep the rows. See the variable's row in the environment table.
+- **Log lines are written in batches** of up to 100 records or 250 ms. After a crash or power loss the newest 250 ms of log rows can be missing from Settings, Logs; a normal shutdown writes everything.
 
 ### Calibre library covers repair
 

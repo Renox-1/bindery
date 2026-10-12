@@ -498,7 +498,7 @@ the recovery actions: **Retry import** (after fixing a path remap), **Retry
 download** on a row that failed before its files arrived (this re-sends the same
 release, it does not search for a different one), **Match to
 book** (attach a failed import to the right book and import it from disk), and
-per-row error detail. Tick rows for **Retry selected**, or use **Retry all
+per-row error detail. An `imported` row leaves the Queue after 7 days (it stays on History), failed and blocked rows stay until you deal with them, and Bindery deletes finished download rows older than `BINDERY_DOWNLOAD_RETENTION_DAYS` (90 by default, `0` keeps them). Once a row is trimmed, Bindery no longer remembers that exact release was grabbed, so if you later delete the file and the book is wanted again, the same release can be grabbed again. Tick rows for **Retry selected**, or use **Retry all
 failed** to cover every failed row at once. If a download client does not answer
 in time the page says so above the list, so a short Queue is never mistaken for
 lost downloads. History records every grab/import/failure and can
@@ -1269,7 +1269,9 @@ Knowing the edges saves time:
   files that resolve to a place inside your library folders, so files behind
   a linked folder that points elsewhere stay on disk (the log says
   `path containment: refusing to delete file`) and the book is still removed
-  from Bindery.
+  from Bindery. If you link author folders to another disk, add the link
+  target as an extra root folder (Settings, Root Folders), or deleting a book
+  there leaves its files behind.
   Library Scan follows a library or audiobook folder that is itself a symlink
   and records the books under the path you configured, but it does not
   descend into a linked folder *inside* it, so books under a linked author
