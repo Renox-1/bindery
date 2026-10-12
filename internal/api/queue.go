@@ -38,6 +38,13 @@ const queueClientPollConcurrency = 4
 
 var queueClientPollTimeout = 1 * time.Second
 
+// queueImportedVisibleFor is how long a finished import stays on the queue
+// page. Imported is the one state with nothing left to do, so the queue lists
+// an import for this long (a week covers "what arrived over the weekend") and
+// then leaves it to the History page. Every other state is listed however old
+// it is; see db.DownloadRepo.ListActive for why.
+const queueImportedVisibleFor = 7 * 24 * time.Hour
+
 var errAlreadyGrabbed = errors.New("already grabbed")
 
 // errNoDownloadClient marks a grab or retry that no enabled download client
@@ -480,14 +487,15 @@ func (h *QueueHandler) enrichedQueueItems(ctx context.Context) ([]enrichedQueueI
 		downloads []models.Download
 		err       error
 	)
+	importedSince := time.Now().Add(-queueImportedVisibleFor)
 	if auth.EnforceTenancy() && auth.UserRoleFromContext(ctx) != "admin" {
 		if uid := auth.UserIDFromContext(ctx); uid != 0 {
-			downloads, err = h.downloads.ListByUser(ctx, uid)
+			downloads, err = h.downloads.ListActiveByUser(ctx, uid, importedSince)
 		} else {
-			downloads, err = h.downloads.List(ctx)
+			downloads, err = h.downloads.ListActive(ctx, importedSince)
 		}
 	} else {
-		downloads, err = h.downloads.List(ctx)
+		downloads, err = h.downloads.ListActive(ctx, importedSince)
 	}
 	if err != nil {
 		return nil, nil, err

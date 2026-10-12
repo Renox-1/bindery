@@ -313,7 +313,13 @@ describe('AuthorsPage bulk selection', () => {
 
 describe('WantedPage list state in the URL', () => {
   beforeEach(() => {
-    vi.spyOn(api, 'listWanted').mockResolvedValue(Array.from({ length: 120 }, (_, i) => makeBook(i + 1)))
+    // The server pages and searches; answer the way it does.
+    const all = Array.from({ length: 120 }, (_, i) => makeBook(i + 1))
+    vi.spyOn(api, 'listWantedPage').mockImplementation(async ({ limit, offset, search }) => {
+      const q = (search ?? '').trim().toLowerCase()
+      const matching = q ? all.filter(b => b.title.toLowerCase().includes(q)) : all
+      return { items: matching.slice(offset, offset + limit), total: matching.length, limit, offset }
+    })
   })
 
   it('comes back to the same page and search after opening a book', async () => {
@@ -355,6 +361,6 @@ describe('WantedPage list state in the URL', () => {
     await goBack()
     expect(await screen.findByPlaceholderText('Search wanted')).toHaveValue('Book 7')
     expect(screen.getByLabelText('Show excluded')).toBeChecked()
-    expect(vi.mocked(api.listWanted)).toHaveBeenLastCalledWith({ includeExcluded: true })
+    expect(vi.mocked(api.listWantedPage)).toHaveBeenLastCalledWith(expect.objectContaining({ includeExcluded: true, search: 'Book 7' }))
   })
 })

@@ -234,6 +234,7 @@ type Scheduler struct {
 	logs                 *db.LogRepo     // optional; enables periodic log retention trim
 	notif                eventNotifier   // optional; fires EventGrabbed on auto-grab success (#849)
 	logRetainDays        int             // 0 = use default (14)
+	downloadRetainDays   int             // 0 = never trim finished download rows
 	downloadDir          string
 	audiobookDownloadDir string
 	// downloadHealth and downloadPathRemap back the periodic client-health
@@ -437,6 +438,40 @@ func (s *Scheduler) WithLogRepo(logs *db.LogRepo, retainDays int) {
 	s.logRetainDays = retainDays
 }
 
+// WithDownloadRetention sets how many days a finished (imported or failed)
+// download row is kept before the retention job deletes it. 0, the zero value,
+// registers no job and keeps every row. Must be called before Start.
+func (s *Scheduler) WithDownloadRetention(days int) {
+	s.downloadRetainDays = days
+}
+
+// downloadTrimBatch and downloadTrimPause shape the retention delete: small
+// batches with a pause between them, so the single database connection is
+// handed back to request handlers and the 15 second download poll between
+// batches instead of being held for one large delete.
+const (
+	downloadTrimBatch = 500
+	downloadTrimPause = 250 * time.Millisecond
+)
+
+// trimFinishedDownloads deletes imported and failed download rows older than
+// the retention window. See db.DownloadRepo.TrimTerminal for what it keeps.
+// A zero or negative window, or no downloads store, does nothing.
+func (s *Scheduler) trimFinishedDownloads(ctx context.Context) {
+	if s.downloads == nil || s.downloadRetainDays <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(s.downloadRetainDays) * 24 * time.Hour)
+	n, err := s.downloads.TrimTerminal(ctx, cutoff, downloadTrimBatch, downloadTrimPause)
+	if err != nil {
+		slog.Warn("download retention trim failed", "removed_before_error", n, "error", err)
+		return
+	}
+	if n > 0 {
+		slog.Info("trimmed finished download rows", "removed", n, "older_than_days", s.downloadRetainDays)
+	}
+}
+
 // WithNotifier attaches a webhook event notifier so auto-grab successes
 // publish EventGrabbed (issue #849). Manual grabs from the queue page already
 // fire via QueueHandler; without this wiring the auto-grab path (wanted-scan,
@@ -620,6 +655,18 @@ func (s *Scheduler) Start() {
 			if err := s.logs.Trim(s.ctx(), cutoff); err != nil {
 				slog.Warn("log trim failed", "error", err)
 			}
+		}))
+	}
+
+	// Trim finished download rows (imported or failed, past the retention
+	// window) four times a day rather than once: a daily timer restarts from
+	// zero on every process start, so an install that restarts more often than
+	// that would never reach it. A pass with nothing to trim is one indexed
+	// query. Not registered when retention is off (BINDERY_DOWNLOAD_RETENTION_DAYS=0).
+	if s.downloads != nil && s.downloadRetainDays > 0 {
+		s.cron.AddFunc("@every 6h", runJob("download-trim", func() {
+			slog.Debug("job: trim finished downloads")
+			s.trimFinishedDownloads(s.ctx())
 		}))
 	}
 

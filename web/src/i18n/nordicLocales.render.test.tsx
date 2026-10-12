@@ -23,7 +23,7 @@ vi.mock('../api/client', async importOriginal => {
       ...actual.api,
       status: vi.fn(),
       listAllBooks: vi.fn(),
-      listWanted: vi.fn(),
+      listWantedPage: vi.fn(),
       listSeries: vi.fn(),
     },
   }
@@ -66,7 +66,7 @@ describe.each(locales)('pages rendered in %s', (locale, bundle) => {
   beforeEach(async () => {
     vi.mocked(api.status).mockResolvedValue({ version: 'dev', commit: 'unknown', buildDate: '', enhancedHardcoverApi: true, hardcoverTokenConfigured: true })
     vi.mocked(api.listAllBooks).mockResolvedValue([])
-    vi.mocked(api.listWanted).mockResolvedValue([])
+    vi.mocked(api.listWantedPage).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     vi.mocked(api.listSeries).mockResolvedValue([])
     await act(async () => { await i18n.changeLanguage(locale) })
   })

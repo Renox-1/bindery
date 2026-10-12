@@ -42,9 +42,27 @@ func (s *Scanner) checkSABnzbdDownloads(ctx context.Context, client *models.Down
 	// terminally blocked rather than left stuck (issue #706 finding 4).
 	seenSourceIDs := make(map[int64]bool)
 
+	// One query for the whole history page instead of one per slot. The
+	// map is a snapshot, so a slot naming a row this poll already handled is
+	// skipped (seenSourceIDs): its status here would be stale, where the
+	// per-slot lookup used to see the update.
+	slotIDs := make([]string, len(history.Slots))
+	for i, slot := range history.Slots {
+		slotIDs[i] = slot.NzoID
+	}
+	byNzo, err := s.downloads.ListByNzoIDs(ctx, slotIDs)
+	if err != nil {
+		slog.Warn("download poll: failed to look up SABnzbd downloads", "client", client.Name, "error", err)
+		return
+	}
+
 	for _, slot := range history.Slots {
-		dl, err := s.downloads.GetByNzoID(ctx, slot.NzoID)
-		if err != nil || dl == nil {
+		row, ok := byNzo[slot.NzoID]
+		if !ok {
+			continue
+		}
+		dl := &row
+		if seenSourceIDs[dl.ID] {
 			continue
 		}
 		seenSourceIDs[dl.ID] = true
@@ -117,10 +135,25 @@ func (s *Scanner) checkNZBGetDownloads(ctx context.Context, client *models.Downl
 	// Track which downloads' sources we observed this cycle (issue #706 finding 4).
 	seenSourceIDs := make(map[int64]bool)
 
+	// One query for the whole history instead of one per item; see
+	// checkSABnzbdDownloads.
+	itemIDs := make([]string, len(history))
+	for i, item := range history {
+		itemIDs[i] = strconv.Itoa(item.NZBID)
+	}
+	byNzo, err := s.downloads.ListByNzoIDs(ctx, itemIDs)
+	if err != nil {
+		slog.Warn("download poll: failed to look up NZBGet downloads", "client", client.Name, "error", err)
+		return
+	}
+
 	for _, item := range history {
-		nzbIDStr := strconv.Itoa(item.NZBID)
-		dl, err := s.downloads.GetByNzoID(ctx, nzbIDStr)
-		if err != nil || dl == nil {
+		row, ok := byNzo[strconv.Itoa(item.NZBID)]
+		if !ok {
+			continue
+		}
+		dl := &row
+		if seenSourceIDs[dl.ID] {
 			continue
 		}
 		seenSourceIDs[dl.ID] = true

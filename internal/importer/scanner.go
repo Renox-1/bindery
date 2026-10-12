@@ -869,18 +869,9 @@ func (s *Scanner) recoverWedgedCompleted(ctx context.Context) {
 }
 
 // downloadByID is a small helper used by recovery/diagnostic paths that only
-// have an ID. DownloadRepo has no GetByID, so look the row up via List.
+// have an ID. It was a scan of the whole table; GetByID reads the one row.
 func (s *Scanner) downloadByID(ctx context.Context, id int64) (*models.Download, error) {
-	all, err := s.downloads.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range all {
-		if all[i].ID == id {
-			return &all[i], nil
-		}
-	}
-	return nil, nil
+	return s.downloads.GetByID(ctx, id)
 }
 
 func (s *Scanner) setDownloadError(ctx context.Context, id int64, message string) {
@@ -1099,7 +1090,10 @@ func (s *Scanner) blockStaleImportFailures(
 	sourceListIsComplete bool,
 	belongsToClient func(models.Download) bool,
 ) {
-	allDownloads, err := s.downloads.List(ctx)
+	// Only two states are acted on below (downloading and importFailed), so ask
+	// for those rather than the whole table, which every poller used to load
+	// once more at the end of every cycle.
+	allDownloads, err := s.downloads.ListByStatuses(ctx, models.StateDownloading, models.StateImportFailed)
 	if err != nil {
 		slog.Warn("blockStaleImportFailures: failed to list downloads", "error", err)
 		return

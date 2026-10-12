@@ -613,6 +613,7 @@ func main() {
 		WithJobs(bgJobs)     // drain a manual "Sync now" on shutdown (#1854)
 	sched.WithHardcoverSyncer(hcSyncer)
 	sched.WithLogRepo(logRepo, cfg.LogRetentionDays)
+	sched.WithDownloadRetention(cfg.DownloadRetentionDays)
 
 	// Anonymous install ping (opt-out via telemetry.enabled=false in settings).
 	// The gatherer captures repo handles by closure and runs at ping time. It

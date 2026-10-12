@@ -1,5 +1,6 @@
 import { request } from './core'
 import type { Book } from './books'
+import type { Page } from './common'
 import type { AuthorMonitorMode, MediaType, MonitorNewItems } from './authors'
 
 export type AuthorBulkAction = 'monitor' | 'unmonitor' | 'delete' | 'search' | 'refresh' | 'set_media_type'
@@ -30,6 +31,17 @@ export const bulkApi = {
   listWanted: (opts?: { includeExcluded?: boolean }) => {
     const qs = opts?.includeExcluded ? '?includeExcluded=true' : ''
     return request<Book[]>(`/wanted/missing${qs}`)
+  },
+
+  // listWantedPage is one page of the wanted list. `total` counts every wanted
+  // book matching the search (and the excluded toggle), whatever the page, so a
+  // page count can be drawn from it. Asking with a limit is what selects the
+  // envelope; listWanted above keeps the bare array.
+  listWantedPage: (opts: { limit: number; offset: number; search?: string; includeExcluded?: boolean }) => {
+    const q = new URLSearchParams({ limit: String(opts.limit), offset: String(opts.offset) })
+    if (opts.search) q.set('search', opts.search)
+    if (opts.includeExcluded) q.set('includeExcluded', 'true')
+    return request<Page<Book>>(`/wanted/missing?${q.toString()}`)
   },
 
   // Bulk actions
