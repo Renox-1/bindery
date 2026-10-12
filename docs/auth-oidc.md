@@ -43,6 +43,10 @@ Bindery picks the `<base-url>` per request, in this order:
 2. **`X-Forwarded-Proto` + `X-Forwarded-Host`** — if `BINDERY_TRUSTED_PROXY` is configured *and* the immediate peer is in that CIDR list, Bindery uses the forwarded headers. Untrusted peers can't influence the URL — their headers are ignored.
 3. **`r.Host`** — direct-access fallback. The scheme comes from the TLS connection only. `X-Forwarded-Proto` is ignored on this path on purpose, because an untrusted caller could otherwise downgrade the callback scheme. Suitable for development; not what you want behind a proxy.
 
+Even from a trusted peer, the forwarded values must look right before they are used (#1640): `X-Forwarded-Proto` has to be `http` or `https`, and `X-Forwarded-Host` has to be a plain host with an optional port (`bindery.example.com`, `bindery.example.com:8443`, `[2001:db8::1]:8443`). A value with a path, userinfo, a scheme, spaces, a comma list or a bad port is ignored and the request's own `Host` is used instead. That matters when a proxy forwards a client supplied `X-Forwarded-Host` instead of setting it itself. If your redirect URL suddenly shows the internal hostname, check what your proxy sends, or set `BINDERY_OIDC_REDIRECT_BASE_URL`.
+
+The preview in the OIDC settings reads `GET /api/v1/auth/oidc/redirect-base`, which needs an admin (a session, the API key, or an auth mode that admits you as the admin). Other users get `403`. The login page does not call it.
+
 For typical reverse-proxy deploys (Traefik, nginx, Caddy, Kubernetes Ingress) where `BINDERY_TRUSTED_PROXY` already needs to be set for proxy-auth or X-Forwarded-For trust, you can leave `BINDERY_OIDC_REDIRECT_BASE_URL` unset and the redirect URL will track the public hostname automatically.
 
 **Path-prefix example** (Bindery mounted at `/bindery/`):
@@ -406,6 +410,8 @@ Bindery performs OIDC discovery (`<issuer>/.well-known/openid-configuration`) wh
 2. The **first login attempt** for a failed provider triggers an on-demand re-discovery, rate-limited to once per 30 seconds per provider. If discovery now succeeds, the provider transitions to `ok` and the login flow continues normally. If it still fails, the user gets the same `unknown oidc provider` error as before, and the failed entry's `last_error` and `last_attempt` are updated for the admin to inspect.
 
 The login page only renders **Sign in with X** buttons for providers in `ok` state — failed providers are intentionally hidden so users don't click into a flow that's guaranteed to error.
+
+`GET /api/v1/auth/oidc/providers` is public so the login page can draw its buttons, and what it returns depends on who asks. An admin (a session, the API key, or an auth mode that admits the caller as the admin) gets everything shown above. Anyone else gets `id`, `name`, `issuer`, `client_id`, `scopes` and `status.state` only: no `allowed_groups`, and no `last_error` or `last_attempt`, because the error text is a raw lookup or connect failure that can name internal hosts. Read the discovery error from the settings screen, or call the endpoint with the API key.
 
 ## Multi-provider note: sub re-use
 

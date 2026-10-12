@@ -213,6 +213,16 @@ Every launch emits a `"starting bindery"` JSON log line containing the resolved 
 
 The frontend is embedded in the binary via `go:embed` — no separate static-file hosting needed.
 
+### File deletes stay inside your roots
+
+Deleting a book or an author with its files removes only files inside a root folder, `BINDERY_LIBRARY_DIR` or `BINDERY_AUDIOBOOK_DIR`, after resolving symlinks on both sides. A root that is itself a symlink to another volume works, but a symlink inside a root that points outside it is not followed. A path outside every root is skipped with a warning in the log (`path containment: refusing to delete file`) and the database row is still removed. With no root at all every file delete is refused until one is set; a default install cannot reach that state, because `BINDERY_LIBRARY_DIR` defaults to `/books`. A Calibre library that lives outside your roots is not covered by deletes from Bindery, as before.
+
+## Caching and large downloads behind a reverse proxy
+
+The web app's build files under `/assets/` carry a content hash in their name, and Bindery serves them with `Cache-Control: public, max-age=31536000, immutable`. A proxy or CDN in front of Bindery may cache them for as long as it likes, because a new release changes the names. Nothing else is cached this way: `index.html` is `no-store`, and files such as the favicon and the manifest carry no cache headers, so clients fetch them again. If your proxy rewrites `Cache-Control` on `/assets/`, leave the long lifetime alone.
+
+Book downloads (`/api/v1/book/{id}/file` and the OPDS equivalent) are not bound by Bindery's 120 second response limit, so a large audiobook can take as long as the client needs. Bindery only drops a download when the client has stopped taking data for five minutes. Downloads honour `Range` requests, so a client can resume. An audiobook folder comes down as a zip that stores the audio, ebook and image files uncompressed, since they are compressed already. If a proxy sits in front, make sure its own read and send timeouts (`proxy_read_timeout` and `proxy_send_timeout` in nginx) are long enough for a slow link, and consider turning proxy response buffering off for that path.
+
 ## Running as a specific UID/GID
 
 Bindery ships on a [distroless/static-debian13:nonroot](https://github.com/GoogleContainerTools/distroless) base. The image has no shell, no `gosu`, and no entrypoint hook — it cannot switch user at runtime the way LinuxServer.io images do. If you need the container to own files as your media-library user (e.g. `1000:1000`), launch it with that UID/GID directly.
@@ -532,6 +542,10 @@ Outbound URLs are validated against an SSRF policy. Two trust levels apply:
 If a same-host service still isn't reachable, the usual cause is that the service is bound to an interface your URL doesn't match (for example SABnzbd listening only on `127.0.0.1` while you used the LAN IP, or vice versa). Either point Bindery at the interface the service actually listens on, or set the service to listen on `0.0.0.0`.
 
 **Outbound proxy interaction.** When `BINDERY_OUTBOUND_PROXY` is set, in-scope requests are dialled to the proxy and the proxy resolves the destination, so the destination-URL SSRF validation still runs up front. The per-connection dial re-check (the DNS-rebind guard) can then only see the proxy's own address, not the target's — so for the strict-policy cover-image proxy that re-check is skipped whenever a proxy is configured; otherwise it would reject a LAN/loopback proxy and block every cover fetch. Local destinations skip the proxy entirely per `BINDERY_OUTBOUND_PROXY_BYPASS_LOCAL` (see [Environment variables](#environment-variables)), which is also what keeps a LAN indexer manager (Jackett/Prowlarr) reachable.
+
+**Outbound proxy and direct connections (#1640).** The dial to the proxy itself is exempt from the per-connection re-check, so a LAN or loopback proxy keeps working. A destination that skips the proxy through `BINDERY_OUTBOUND_PROXY_BYPASS_LOCAL` or `BINDERY_OUTBOUND_PROXY_NO_PROXY` is dialled directly, and that direct connection is now checked against the same policy as it would be with no proxy configured; before #1640 it was not. If a destination you bypass is refused with `not allowed: points to ...`, it resolves to an address the policy for that feature blocks, for example loopback for a cover image or a webhook.
+
+**Download client and Audiobookshelf connections.** These are always direct, never through `BINDERY_OUTBOUND_PROXY`. Each connection, and each redirect a client answers with, is checked when it is made against the admin-typed service policy above: loopback, LAN and Docker hostnames work, link-local and cloud-metadata addresses are refused. A client saved on a `169.254.x.x` address fails its connection test with `points to link-local address`; reach it by another address.
 
 ### What goes in a download client's Host field
 

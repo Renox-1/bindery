@@ -204,3 +204,37 @@ func TestMetadataProfileRoutesReadsOpenWritesAdmin(t *testing.T) {
 		})
 	}
 }
+
+// GetRedirectBase makes the stub satisfy oidcRedirectBaseRouteHandler.
+func (h *stubAuthzGateHandler) GetRedirectBase(w http.ResponseWriter, _ *http.Request) {
+	h.record("redirect-base", w)
+}
+
+func registerOIDCRedirectBaseStub(r chi.Router, h *stubAuthzGateHandler) {
+	registerOIDCRedirectBaseRoute(r, h)
+}
+
+var oidcRedirectBaseRoute = authzGateRoute{
+	name: "oidc redirect base", method: http.MethodGet, path: "/auth/oidc/redirect-base", called: "redirect-base",
+}
+
+// TestOIDCRedirectBaseRouteRequiresAdmin (#1640): the endpoint exists to drive
+// the admin settings preview and reports the resolved base URL, so a role=user
+// caller must get 403 and never reach the handler.
+func TestOIDCRedirectBaseRouteRequiresAdmin(t *testing.T) {
+	rec, h := serveAuthzGateRoute(t, registerOIDCRedirectBaseStub, oidcRedirectBaseRoute, "user")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d; want %d (RequireAdmin should reject role=user)", rec.Code, http.StatusForbidden)
+	}
+	if len(h.called) != 0 {
+		t.Fatalf("handler invoked for non-admin request: %v", h.called)
+	}
+}
+
+// The admin who configures OIDC keeps the preview.
+func TestOIDCRedirectBaseRouteAllowsAdmin(t *testing.T) {
+	rec, h := serveAuthzGateRoute(t, registerOIDCRedirectBaseStub, oidcRedirectBaseRoute, "admin")
+	if rec.Code != http.StatusNoContent || len(h.called) != 1 || h.called[0] != "redirect-base" {
+		t.Fatalf("status = %d called = %v; want 204 [redirect-base]", rec.Code, h.called)
+	}
+}

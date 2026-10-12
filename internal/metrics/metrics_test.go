@@ -158,3 +158,55 @@ func scrape(t *testing.T) string {
 	}
 	return rec.Body.String()
 }
+
+// deadlineRecorder is a ResponseWriter that, like net/http's own, lets a
+// handler move the write deadline and flush.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline    time.Time
+	deadlineSet bool
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
+	d.deadline, d.deadlineSet = t, true
+	return nil
+}
+
+// The metrics middleware sits between the server and every handler, so a
+// handler that clears the server write deadline (large file downloads do) goes
+// through http.NewResponseController. Without Unwrap the controller stops at
+// the recorder and answers ErrNotSupported, and the download is cut off at
+// the server WriteTimeout.
+func TestHTTPMiddleware_ResponseControllerReachesServerWriter(t *testing.T) {
+	under := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	var deadlineErr, flushErr error
+	var plainFlusher bool
+	h := HTTPMiddleware(func(*http.Request) string { return "/x" })(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		rc := http.NewResponseController(w)
+		deadlineErr = rc.SetWriteDeadline(time.Time{})
+		_, _ = w.Write([]byte("hello"))
+		flushErr = rc.Flush()
+		// Handlers also flush with a plain assertion.
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+			plainFlusher = true
+		}
+	}))
+	h.ServeHTTP(under, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	if deadlineErr != nil {
+		t.Fatalf("SetWriteDeadline through the middleware: %v", deadlineErr)
+	}
+	if !under.deadlineSet || !under.deadline.IsZero() {
+		t.Fatalf("underlying writer deadline set=%v value=%v, want set to the zero time", under.deadlineSet, under.deadline)
+	}
+	if flushErr != nil {
+		t.Fatalf("Flush through the middleware: %v", flushErr)
+	}
+	if !plainFlusher {
+		t.Fatal("the middleware writer does not implement http.Flusher")
+	}
+	if !under.Flushed {
+		t.Fatal("underlying writer was not flushed")
+	}
+}

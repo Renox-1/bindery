@@ -329,6 +329,7 @@ func (h *CalibreBridgeHandler) File(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="book.`+bridgeFileExt(row.Format)+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.Header().Set("Cache-Control", "no-store")
+	w = withStallDeadline(w)
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 

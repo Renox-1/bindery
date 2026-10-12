@@ -157,8 +157,13 @@ func NewClient(baseURL, apiKey string) (*Client, error) {
 	return &Client{
 		baseURL: normalized,
 		apiKey:  normalizedKey,
+		// Dialled directly (never via BINDERY_OUTBOUND_PROXY), with the dial
+		// and every redirect hop checked so a redirect or a rebound hostname
+		// cannot reach a link-local or metadata address.
 		httpClient: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout:       defaultTimeout,
+			Transport:     httpsec.DirectGuardedTransport(httpsec.PolicyLANLoopback),
+			CheckRedirect: httpsec.RedirectGuard(httpsec.PolicyLANLoopback),
 		},
 		userAgent: useragent.Get(),
 	}, nil

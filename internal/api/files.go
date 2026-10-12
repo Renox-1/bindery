@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -208,7 +209,7 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 
 	name := filepath.Base(filepath.Clean(filePath))
 	if sp.info.IsDir() {
-		streamZip(w, sp.root, sp.rel, name)
+		streamZip(withStallDeadline(w), sp.root, sp.rel, name)
 		return
 	}
 
@@ -218,7 +219,74 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 	}
 	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Disposition", contentDisposition(name))
-	http.ServeContent(w, r, name, info.ModTime(), f)
+	http.ServeContent(withStallDeadline(w), r, name, info.ModTime(), f)
+}
+
+// downloadStallTimeout is how long a file download may sit without the client
+// taking any data before the connection is dropped. It is a variable so a test
+// can shorten it.
+var downloadStallTimeout = 5 * time.Minute
+
+// withStallDeadline replaces the server's whole response write deadline with a
+// rolling one for a response whose size the server does not control.
+// http.Server.WriteTimeout bounds the entire response, so a multi gigabyte
+// audiobook on a slow link was cut off at that limit (120 s) however steadily
+// the client was reading. Here every write pushes the deadline to now plus
+// downloadStallTimeout instead: a client that keeps reading is never cut off,
+// and one that stops reading is dropped after that long rather than holding the
+// connection and a goroutine forever.
+//
+// Call it only after the path checks, so an error response still runs under
+// the normal deadline. A writer that cannot move its deadline (a wrapper that
+// hides the server's writer, a test recorder) is returned as it is and keeps
+// the server's setting.
+func withStallDeadline(w http.ResponseWriter) http.ResponseWriter {
+	rc := http.NewResponseController(w)
+	now := time.Now()
+	if err := rc.SetWriteDeadline(now.Add(downloadStallTimeout)); err != nil {
+		if !errors.Is(err, http.ErrNotSupported) {
+			slog.Debug("file download: could not extend the write deadline", "error", err)
+		}
+		return w
+	}
+	return &stallDeadlineWriter{ResponseWriter: w, rc: rc, last: now}
+}
+
+// stallDeadlineWriter extends the write deadline as the response is written.
+type stallDeadlineWriter struct {
+	http.ResponseWriter
+	rc   *http.ResponseController
+	last time.Time
+}
+
+func (s *stallDeadlineWriter) Write(b []byte) (int, error) {
+	// Moving the deadline is cheap, but not worth doing for every 32 KiB copy
+	// buffer: once a second (less for a very short timeout) keeps it close
+	// to exact.
+	if now := time.Now(); now.Sub(s.last) >= min(time.Second, downloadStallTimeout/10) {
+		s.last = now
+		_ = s.rc.SetWriteDeadline(now.Add(downloadStallTimeout))
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.NewResponseController keep reaching the server's writer.
+func (s *stallDeadlineWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Flush keeps a plain http.Flusher assertion working.
+func (s *stallDeadlineWriter) Flush() { _ = s.rc.Flush() }
+
+// zipMethod picks how a file is stored in a streamed zip. Audio, ebooks and
+// images are compressed already, and deflating them spends CPU for a few
+// percent while a large audiobook is read through twice. Text, cue sheets and
+// PDF (not reliably compressed inside) keep Deflate, as does anything unknown.
+func zipMethod(name string) uint16 {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp3", ".m4b", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
+		".epub", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip":
+		return zip.Store
+	}
+	return zip.Deflate
 }
 
 // writeServeError answers a request whose openServable or openFile failed and
@@ -553,7 +621,7 @@ func streamZip(w http.ResponseWriter, root *os.Root, dir, name string) {
 		if base != "." {
 			rel = strings.TrimPrefix(p, base+"/")
 		}
-		zf, zerr := zw.Create(rel)
+		zf, zerr := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zipMethod(rel)})
 		if zerr != nil {
 			return zerr
 		}

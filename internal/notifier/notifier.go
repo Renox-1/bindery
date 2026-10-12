@@ -242,23 +242,12 @@ func New(repo *db.NotificationRepo) *Notifier {
 	}
 }
 
-// guardedTransport mirrors the image-proxy transport. On the direct path it
-// installs a per-dial SSRF-revalidating DialContext, closing the DNS-rebind
-// TOCTOU between the up-front validate and the actual connect. When an outbound
-// proxy is configured the dial targets the operator-trusted proxy (not the
-// webhook host), so the strict per-dial recheck is skipped and the up-front
-// validate + CheckRedirect carry the guard.
+// guardedTransport installs a per-dial SSRF-revalidating DialContext, closing
+// the DNS-rebind TOCTOU between the up-front validate and the actual connect.
+// Under an outbound proxy the dial to the proxy itself is exempt and a
+// bypass-listed (direct) destination is checked.
 func guardedTransport(policy httpsec.Policy) http.RoundTripper {
-	base := httpsec.DefaultProxyTransport()
-	if httpsec.ProxyFunc() != nil {
-		return base
-	}
-	if t, ok := base.(*http.Transport); ok {
-		c := t.Clone()
-		c.DialContext = httpsec.NewDialContext(policy)
-		return c
-	}
-	return &http.Transport{DialContext: httpsec.NewDialContext(policy)}
+	return httpsec.GuardedTransport(policy)
 }
 
 // SetValidator overrides the SSRF validator. Intended for tests that need to

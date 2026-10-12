@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/vavallee/bindery/internal/abs"
 	"github.com/vavallee/bindery/internal/api"
@@ -695,6 +694,7 @@ func main() {
 		WithSeries(seriesRepo).
 		WithEditionHydration(editionRepo).
 		WithRoots(libraryRoots).
+		WithCoverStore(coverStore).
 		WithLifetimeCtx(appCtx)
 	// Interactive search records what it returns here, and a grab from a
 	// non-admin account is held to it: it can grab a search result, not make
@@ -876,29 +876,7 @@ func main() {
 
 	// Router
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	// BINDERY_TRUSTED_PROXY (optional): comma-separated IP/CIDR list of
-	// reverse proxies permitted to set X-Forwarded-For. When unset, XFF
-	// headers are ignored — required for local-only auth mode to be safe
-	// against on-network spoofing.
-	r.Use(trustedProxyMiddleware())
-	// api.Recoverer, not chi's: it logs the panic and stack through slog (so
-	// they reach the in-app log buffer) and answers JSON with the request id.
-	// It must stay below middleware.RequestID.
-	r.Use(api.Recoverer)
-	r.Use(middleware.Compress(5))
-	r.Use(api.SecurityHeaders(cfg.FrameAncestors))
-	// Cap JSON / form request bodies at 1 MiB by default so an authenticated
-	// client cannot pin the process by streaming a multi-gigabyte body into
-	// json.Decode. Routes that legitimately accept larger payloads opt in via
-	// api.WithMaxBody on the chi sub-route (see /migrate/* below).
-	// PreserveRawBody must run first so the per-route override can re-wrap
-	// the raw body with a higher cap; without it the override would chain a
-	// larger MaxBytesReader on top of the smaller default and the inner cap
-	// would silently win.
-	r.Use(api.PreserveRawBody)
-	r.Use(api.MaxRequestBody)
-	r.Use(metrics.HTTPMiddleware(routeTemplate))
+	useCoreMiddleware(r, cfg.FrameAncestors)
 
 	// Prometheus exposition. Mounted at the router root (no auth, no
 	// CSRF, no XRequestedWith) because Prometheus scrapes don't carry
@@ -994,7 +972,7 @@ func main() {
 		r.Post("/auth/password", authHandler.ChangePassword)
 		// OIDC — login/callback are unauthenticated; provider management requires auth.
 		r.Get("/auth/oidc/providers", oidcHandler.GetProviders)
-		r.Get("/auth/oidc/redirect-base", oidcHandler.GetRedirectBase)
+		registerOIDCRedirectBaseRoute(r, oidcHandler)
 		// The discovery probe is admin-only: it is an outbound fetch oracle
 		// against the container's own network (see registerOIDCDiscoveryRoutes).
 		registerOIDCDiscoveryRoutes(r, oidcHandler)
@@ -1052,6 +1030,7 @@ func main() {
 		r.Get("/book/{id}/series-exclusions", bookHandler.SeriesExclusions)
 		r.Post("/book/{id}/rebind", bookHandler.Rebind)
 		r.Post("/book/{id}/enrich-audiobook", bookHandler.EnrichAudiobook)
+		registerBookCoverRoutes(r, bookHandler)
 		r.Post("/book/{id}/search", indexerHandler.SearchBook)
 		r.Get("/book/{id}/file", fileHandler.Download)
 
