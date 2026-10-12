@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -403,5 +404,34 @@ func TestTrimTerminal_AgeIsWhenTheRowFinished(t *testing.T) {
 	}
 	if have["text-stamp-old"] || n != 1 {
 		t.Errorf("text-stamp-old should be the only row trimmed: removed %d, still present %v", n, have["text-stamp-old"])
+	}
+}
+
+// TestListByNzoIDs_ChunksPastTheVariableLimit: SQLite refuses a statement with
+// more bound variables than its limit (32766 in this driver), so a poll over a
+// history larger than that only works if ids go out in chunks. Ids that sit in
+// the first, a middle and the last chunk must all come back.
+func TestListByNzoIDs_ChunksPastTheVariableLimit(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	r := NewDownloadRepo(database)
+	ctx := context.Background()
+	const n = 33500
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = "id" + strconv.Itoa(i)
+	}
+	for _, i := range []int{0, 16000, n - 1} {
+		retentionRow(t, r, "g"+ids[i], models.StateDownloading, time.Now(), nil, sp(ids[i]))
+	}
+	got, err := r.ListByNzoIDs(ctx, ids)
+	if err != nil {
+		t.Fatalf("%d ids in one call: %v", n, err)
+	}
+	if len(got) != 3 {
+		t.Errorf("found %d rows, want the 3 that exist", len(got))
 	}
 }
