@@ -14,6 +14,7 @@ Open a book's detail page and click **Edit**. You can change:
 | Genres | Comma-separated; the first genre drives the `{Genre}` naming token |
 | Language | Language code, e.g. `en`, `it` — drives the `{Lang}` naming token |
 | Release date | `YYYY-MM-DD`, or clear it entirely |
+| Series | The author's series, with a position; admin only. See [Fixing one book's series](Hardcover-Series-Wiki.md#fixing-one-books-series) |
 
 Every field you edit is **locked**: the nightly metadata refresh, the
 author-works sync, and Audiobookshelf/Calibre re-imports keep your value

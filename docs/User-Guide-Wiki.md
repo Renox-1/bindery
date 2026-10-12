@@ -141,7 +141,14 @@ default; tick it to bring every book of those authors into line in one action.
 
 Two related labels:
 
-- **In Library** = status `imported` = Bindery can see the file on disk.
+- **In Library** = Bindery can see at least one file for the book on disk. That is
+  status `imported`, and also a `wanted` book of format *Both* that already has
+  one of its two formats: it stays on the Wanted page while the other format is
+  missing, and it is listed under In Library as well (#3132). The Books page,
+  an author page's In library count and the have / total number on the Authors
+  list all use this one rule. With a format filter set, the book has to own
+  that format, so Audiobook plus In Library does not list a book that only has
+  an ebook.
 - **Exclude vs Delete**: a metadata refresh only adds books back for an author
   you monitor and have set to take new items, so for those authors deleting an
   unwanted catalogue book is temporary — the next refresh recreates it.
@@ -491,7 +498,7 @@ the recovery actions: **Retry import** (after fixing a path remap), **Retry
 download** on a row that failed before its files arrived (this re-sends the same
 release, it does not search for a different one), **Match to
 book** (attach a failed import to the right book and import it from disk), and
-per-row error detail. Tick rows for **Retry selected**, or use **Retry all
+per-row error detail. An `imported` row leaves the Queue after 7 days (it stays on History), failed and blocked rows stay until you deal with them, and Bindery deletes finished download rows older than `BINDERY_DOWNLOAD_RETENTION_DAYS` (90 by default, `0` keeps them). Once a row is trimmed, Bindery no longer remembers that exact release was grabbed, so if you later delete the file and the book is wanted again, the same release can be grabbed again. Tick rows for **Retry selected**, or use **Retry all
 failed** to cover every failed row at once. If a download client does not answer
 in time the page says so above the list, so a short Queue is never mistaken for
 lost downloads. History records every grab/import/failure and can
@@ -1155,9 +1162,19 @@ name**, which is the display name rewritten as "Last, First". Bindery derives
 it when the author is created, and a metadata refresh replaces it with the
 provider's own sort name whenever the provider supplies one.
 
-So the Authors page is sorted by last name out of the box. **A to Z** in the
-Sort menu gives you Asimov, Atwood, Bardugo; the two **First name** entries are
-the ones that file Isaac under I.
+So the Authors page is sorted by last name out of the box. **Last name A to Z**
+in the Sort menu gives you Asimov, Atwood, Bardugo; the two **First name**
+entries are the ones that file Isaac under I (#2805). The merge authors dialog
+lists authors in the same last name order, and the Books grid's sort menu offers
+**Author A to Z** and **Z to A**, which only the table's column header reached
+before.
+
+The Books column of the Authors table reads *have / total*, for example 5 / 12,
+and each card in the grid says how many of the author's books are in your library,
+by the In Library rule under rule 2 near the top of this page (#3092). An author with no books shows a dash.
+On an author's own page the book list has a **Sort** control (title, published,
+added, each both ways) and Monitored and Language filters beside Type, Status and
+Published (#3087); books with no release date sort last.
 
 | Display name | Files under | Rule |
 |---|---|---|
@@ -1228,7 +1245,10 @@ defined rather than translated per language.
 
 Knowing the edges saves time:
 
-- **Track reading.** No read/unread, progress, or ratings. Bindery acquires
+- **Track reading.** No read/unread, progress, or ratings of your own. Bindery
+  shows the community rating the metadata provider supplies (on the book page,
+  in the Books and author tables and grids, and in Add to library; the Books
+  table sorts by it, unrated books last), but does not record yours. Bindery acquires
   and organises; Audiobookshelf, Hardcover, or your reader do consumption.
 - **Identify arbitrary releases.** No release-first flow (see the top of this
   page).
@@ -1249,7 +1269,9 @@ Knowing the edges saves time:
   files that resolve to a place inside your library folders, so files behind
   a linked folder that points elsewhere stay on disk (the log says
   `path containment: refusing to delete file`) and the book is still removed
-  from Bindery.
+  from Bindery. If you link author folders to another disk, add the link
+  target as an extra root folder (Settings, Root Folders), or deleting a book
+  there leaves its files behind.
   Library Scan follows a library or audiobook folder that is itself a symlink
   and records the books under the path you configured, but it does not
   descend into a linked folder *inside* it, so books under a linked author

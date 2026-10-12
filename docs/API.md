@@ -96,6 +96,12 @@ GET    /api/v1/author/{id}/aliases                list merged-in alias rows
 POST   /api/v1/author/{id}/merge                  merge another author into this one
 ```
 
+Each author in `GET /api/v1/author` carries `statistics.bookCount` (the author's
+books, scoped to the caller like `GET /book`) and `statistics.availableBookCount`
+(#3092), the subset in the library by the same rule as `GET /book?status=imported`:
+a book with at least one tracked file, including a `wanted` book that already holds
+one of its formats. `wantedBookCount` is not filled on the list.
+
 `POST /api/v1/author/book` answers **409 Conflict** when `foreignBookId` (or
 the canonical id it resolves to on the ISBN path) already matches a book in the
 requesting user's library (#1227). "In the library" is scoped exactly like
@@ -340,11 +346,17 @@ PUT    /api/v1/book/{id}/exclude                  exclude from future searches
 GET    /api/v1/book/{id}/series-exclusions        the series the book was taken out of: [{seriesForeignId, seriesId, seriesTitle, position}]; seriesId is 0 when nothing resolves the id any more
 POST   /api/v1/book/{id}/rebind                   re-link to a different metadata record
 POST   /api/v1/book/{id}/enrich-audiobook         pull narrator/duration/cover from Audnex
-POST   /api/v1/book/{id}/cover                    set the cover from the request body (raw JPEG, PNG, WebP or GIF, max 10 MB); stored locally, and a refresh does not replace it
+POST   /api/v1/book/{id}/cover                    set the cover from the request body (raw JPEG, PNG, WebP or GIF, max 10 MB); answers 413 over the limit and 415 for anything that is not one of those four; stored locally, replaces the current cover, and a refresh does not replace it. Answers the full book, as `GET /book/{id}` does
 POST   /api/v1/book/{id}/search                   manual indexer search
 GET    /api/v1/book/{id}/file                     download the imported file (auth required; `?path=…` serves one specific tracked file, for a book holding several of a format; `?format=ebook|audiobook` picks the format on dual-format books; `?path=` wins when both are sent)
 GET    /api/v1/book/{id}/calibre                  where the book stands in the Calibre delivery queue (see Calibre below)
 ```
+
+Each book carries `averageRating` (community rating, 0 when the provider has none)
+and `ratingsCount` (#3124). `GET /book?sort=` also accepts `rating-desc` and
+`rating-asc`; unrated books sort last in both directions, and `rating-desc` breaks
+ties by `ratingsCount`. OpenLibrary results of `GET /search/book` carry the
+same two fields.
 
 ### Series
 
@@ -423,6 +435,12 @@ identifier. Both fields hold the library row id and are omitted otherwise, so a
 client can offer "open" for those rows and "add" for the rest. The lookup is
 owner scoped: another user's copy does not stamp. If the library lookup itself
 fails the search still succeeds, unstamped.
+
+An author in `/search/author` carries the provider's work count as
+`statistics.bookCount` when one is known (#3126). Hardcover supplies it as well as
+OpenLibrary and Nasjonalbiblioteket, and when several providers return the same
+author the surviving record keeps the largest count reported, so the count is not
+lost when a provider that reports none wins the merge.
 
 ```json
 [
@@ -1222,6 +1240,11 @@ unset key:
 | `default.media_type` | add author dialog |
 | `author.default_monitor_mode` | add author dialog |
 | `author.default_monitor_latest_count` | add author dialog |
+
+`metadata.primary_provider` accepts `openlibrary` (the default), `dnb`, `nb`
+(Nasjonalbiblioteket), `bnf` (Bibliothèque nationale de France, #3144) and
+`hardcover`. `nb` and `bnf` are queried only while selected: an instance that
+never selects them never contacts either library.
 
 Requests authenticated with the API key are treated as admin, so a script or a
 third party client using the key still reads every non secret setting. A client
