@@ -91,7 +91,7 @@ func (r *LogRepo) InsertBatch(ctx context.Context, entries []LogEntry) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare log batch: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, e := range entries {
 		fields := e.Fields
 		if fields == nil {

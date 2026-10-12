@@ -228,7 +228,7 @@ func (h *LogHandler) flush(batch []LogEntry, failing *bool) {
 	}
 	if !*failing {
 		*failing = true
-		fmt.Fprintf(logStderr, "bindery: log writer dropped %d of %d entries: batch error: %v; last row error: %v\n",
+		_, _ = fmt.Fprintf(logStderr, "bindery: log writer dropped %d of %d entries: batch error: %v; last row error: %v\n",
 			lost, len(batch), err, lastErr)
 	}
 }
