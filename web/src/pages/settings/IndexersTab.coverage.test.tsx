@@ -335,8 +335,8 @@ describe('IndexersTab Prowlarr', () => {
   })
 
   it.each([
-    ['connected', () => m.testProwlarr.mockResolvedValue({ ok: 'true', version: '1.2.3' }), 'settings.prowlarr.connectedVersion version=1.2.3'],
-    ['refused', () => m.testProwlarr.mockResolvedValue({ ok: 'false', error: 'refused' }), 'settings.prowlarr.connFailed error=refused'],
+    ['connected', () => m.testProwlarr.mockResolvedValue({ ok: true, version: '1.2.3' }), 'settings.prowlarr.connectedVersion version=1.2.3'],
+    ['refused', () => m.testProwlarr.mockResolvedValue({ ok: false, error: 'refused' }), 'settings.prowlarr.connFailed error=refused'],
     ['thrown', () => m.testProwlarr.mockRejectedValue(new Error('boom')), 'boom'],
     ['thrown non-error', () => m.testProwlarr.mockRejectedValue('x'), 'settings.prowlarr.connFailedGeneric'],
   ])('reports a %s connection test', async (_name, arrange, expected) => {

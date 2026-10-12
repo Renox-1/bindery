@@ -83,7 +83,11 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}

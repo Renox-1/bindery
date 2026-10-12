@@ -2,11 +2,35 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+// The CSRF header rejection writes a JSON body, so it has to say so. It used
+// http.Error, which replaces the Content-Type set just before it with
+// text/plain, leaving a JSON body labelled as text.
+func TestRequireXRequestedWith_RejectionIsLabelledJSON(t *testing.T) {
+	h := RequireXRequestedWith(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/queue/grab", nil))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != "forbidden" {
+		t.Errorf("body = %q (err %v), want {\"error\":\"forbidden\"}", rec.Body.String(), err)
+	}
+}
 
 // Regression tests for #560: /api/v1/auth/status was in the AllowUnauthPath
 // list and the middleware short-circuited there before proxy identity

@@ -162,7 +162,11 @@ func (h *PendingHandler) Grab(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pr, err := h.pending.GetByID(r.Context(), id)
-	if err != nil || pr == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if pr == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending release not found"})
 		return
 	}
@@ -219,7 +223,9 @@ func (h *PendingHandler) Grab(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending release not found"})
 			return
 		}
-		writeServerError(w, r, err)
+		// A missing client is a 400 the user can fix and a refused send is a
+		// 502, the same as the queue grab route; the rest is a storage fault.
+		writeGrabError(w, r, err)
 		return
 	}
 
