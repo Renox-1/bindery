@@ -86,31 +86,17 @@ func sharedGuardedTransport() http.RoundTripper {
 	return guardedTransportShared
 }
 
-// guardedTransport mirrors the image proxy and notifier transports. On the
-// direct path it installs a per-dial SSRF re-validation, closing the DNS-rebind
-// TOCTOU between the up-front ValidateOutboundURL in the Prowlarr handlers
-// (internal/api/prowlarr.go) and the connect that actually happens (#2353).
-//
-// When an outbound proxy is configured the dial targets the operator-trusted
-// proxy rather than the Prowlarr host, so a per-dial check would re-validate
-// the proxy's own address and reject a LAN or loopback proxy. In that shape we
-// return the shared proxy transport unchanged and the up-front validation
-// carries the guard, which is all a rebind check could see past a proxy anyway.
+// guardedTransport is the Prowlarr dial guard (#2353): a per-dial SSRF
+// re-validation closing the DNS-rebind TOCTOU between the up-front
+// ValidateOutboundURL in the Prowlarr handlers (internal/api/prowlarr.go) and
+// the connect that actually happens. Under an outbound proxy the dial to the
+// proxy itself is exempt and a bypass-listed (direct) destination is checked.
 //
 // PolicyLANLoopback matches what the create and update handlers validate
 // against: a Prowlarr on the LAN, or on the Bindery host itself, is the normal
 // deployment.
 func guardedTransport() http.RoundTripper {
-	base := httpsec.DefaultProxyTransport()
-	if httpsec.ProxyFunc() != nil {
-		return base
-	}
-	if t, ok := base.(*http.Transport); ok {
-		c := t.Clone()
-		c.DialContext = httpsec.NewDialContext(httpsec.PolicyLANLoopback)
-		return c
-	}
-	return &http.Transport{DialContext: httpsec.NewDialContext(httpsec.PolicyLANLoopback)}
+	return httpsec.GuardedTransport(httpsec.PolicyLANLoopback)
 }
 
 // remoteIndexer is the shape of each element in GET /api/v1/indexer.

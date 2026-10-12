@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -392,10 +393,31 @@ func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "user not found")
 		return
 	}
-	if !auth.VerifyPassword(req.CurrentPassword, u.PasswordHash) {
+	// The current-password check is a password oracle for anyone holding a
+	// session (a stolen cookie, an unattended browser), so it is throttled like
+	// Login: the same limiter, keyed on the account rather than the IP because
+	// the session already identifies it. Acquire counts the attempt before the
+	// KDF runs, so a burst cannot run more than the limit; Reset clears it on
+	// success.
+	limiterKey := "password-change:" + strconv.FormatInt(u.ID, 10)
+	if !h.limiter.Acquire(limiterKey) {
+		slog.Warn("password change: too many wrong current passwords, refusing", "user_id", u.ID)
+		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
+	ok, err := h.verifyPassword(ctx, req.CurrentPassword, u.PasswordHash)
+	if err != nil {
+		// The client went away while waiting for a KDF slot; nothing was
+		// verified, so do not count it.
+		h.limiter.Release(limiterKey)
+		writeErr(w, http.StatusServiceUnavailable, "server busy, try again")
+		return
+	}
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "current password incorrect")
 		return
 	}
+	h.limiter.Reset(limiterKey)
 	hash, err := auth.HashPassword(req.NewPassword)
 	if err != nil {
 		writeServerError(w, r, err)

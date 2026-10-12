@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vavallee/bindery/internal/models"
 )
 
 // TestLibraryRoots_Contains exercises the containment primitive directly so a
@@ -168,14 +171,169 @@ func TestLibraryRoots_DefaultsOnlyContains(t *testing.T) {
 	}
 }
 
-// TestLibraryRoots_NoConfigurationFallsOpen documents the deliberate
-// fail-open when neither a DB lister nor static defaults are supplied.
-// The production wiring always supplies at least one default, but legacy
-// tests that construct handlers without WithRoots rely on this branch.
-func TestLibraryRoots_NoConfigurationFallsOpen(t *testing.T) {
+// TestLibraryRoots_NoConfigurationFailsClosed: with neither a DB lister nor
+// static defaults there is nothing to be "inside", so a delete is refused. The
+// production wiring always seeds BINDERY_LIBRARY_DIR (default /books), so this
+// state is only reachable if that wiring is removed. A nil *LibraryRoots (the
+// explicit opt-out used by unwired test fixtures) still allows.
+func TestLibraryRoots_NoConfigurationFailsClosed(t *testing.T) {
 	roots := NewLibraryRoots(nil)
-	if !roots.Contains(context.Background(), "/tmp/whatever.epub") {
-		t.Error("no roots configured: Contains must fall open to preserve legacy behaviour")
+	if roots.Contains(context.Background(), "/tmp/whatever.epub") {
+		t.Error("no roots configured: Contains must fail closed")
+	}
+}
+
+type failingRootLister struct{}
+
+func (failingRootLister) List(context.Context) ([]models.RootFolder, error) {
+	return nil, errors.New("database is locked")
+}
+
+// A lister error with no static defaults leaves zero roots; that must refuse
+// rather than allow, or a transient DB hiccup becomes allow-all deletes.
+func TestLibraryRoots_ListerErrorWithoutDefaultsFailsClosed(t *testing.T) {
+	roots := NewLibraryRoots(failingRootLister{})
+	if roots.Contains(context.Background(), "/tmp/whatever.epub") {
+		t.Error("lister error and no defaults: Contains must fail closed")
+	}
+	// With a default the check still works off the default alone.
+	dir := t.TempDir()
+	roots = NewLibraryRoots(failingRootLister{}, dir)
+	if !roots.Contains(context.Background(), filepath.Join(dir, "a.epub")) {
+		t.Error("lister error with a default root: path under the default must be allowed")
+	}
+}
+
+// A symlink that sits inside the root but points outside must not pass the
+// delete gate (S2): the old lexical fallback accepted it.
+func TestLibraryRoots_Contains_SymlinkOutOfRootRefused(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	ctx := context.Background()
+
+	secret := mustWrite(t, filepath.Join(outside, "secret.epub"))
+	link := filepath.Join(root, "innocent.epub")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, link) {
+		t.Error("file symlink escaping the root must be refused")
+	}
+	// A symlinked directory inside the root pointing out: the file under it
+	// resolves outside, whether or not the leaf exists.
+	dirLink := filepath.Join(root, "author")
+	if err := os.Symlink(outside, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, filepath.Join(dirLink, "secret.epub")) {
+		t.Error("file under a directory symlink escaping the root must be refused")
+	}
+	if roots.Contains(ctx, filepath.Join(dirLink, "already-gone.epub")) {
+		t.Error("missing leaf under a directory symlink escaping the root must be refused")
+	}
+}
+
+// A path that runs through a symlink that cannot be resolved (dangling target
+// or a loop) is not "a missing file": EvalSymlinks fails the same way for both,
+// and appending the tail to the last resolvable parent would accept a path the
+// filesystem may send anywhere once the target appears. It must be refused.
+func TestLibraryRoots_Contains_UnresolvableSymlinkRefused(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	ctx := context.Background()
+
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink(filepath.Join(outside, "not-yet"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, dangling) {
+		t.Error("dangling symlink must be refused")
+	}
+	if roots.Contains(ctx, filepath.Join(dangling, "sub", "book.epub")) {
+		t.Error("missing leaf under a dangling directory symlink must be refused")
+	}
+	loop1, loop2 := filepath.Join(root, "loop1"), filepath.Join(root, "loop2")
+	if err := os.Symlink(loop2, loop1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(loop1, loop2); err != nil {
+		t.Fatal(err)
+	}
+	if roots.Contains(ctx, filepath.Join(loop1, "book.epub")) {
+		t.Error("path through a symlink loop must be refused")
+	}
+}
+
+// ".." after a directory symlink: Clean folds "root/link/../x" to "root/x", but
+// the kernel resolves the link first and lands beside the link's target, which
+// can be outside the root. The check would be looking at a different path than
+// the delete uses, so any ".." segment is refused.
+func TestLibraryRoots_Contains_DotDotAfterSymlinkRefused(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "books")
+	outside := filepath.Join(base, "outside", "deep")
+	for _, d := range []string{root, outside} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	victim := mustWrite(t, filepath.Join(base, "outside", "victim.epub"))
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	// root/link/../victim.epub is outside/victim.epub on disk.
+	p := root + "/link/../victim.epub"
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("test setup: %s should reach the victim file: %v", p, err)
+	}
+	if roots.Contains(context.Background(), p) {
+		t.Errorf("Contains(%q) = true; it reaches %s outside the root", p, victim)
+	}
+}
+
+// A root that is itself a symlink (a library on another volume) must keep
+// working: both sides are resolved before comparing.
+func TestLibraryRoots_Contains_SymlinkedRoot(t *testing.T) {
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	linkRoot := filepath.Join(linkParent, "library")
+	if err := os.Symlink(real, linkRoot); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	roots := NewLibraryRoots(staticRootLister{paths: []string{linkRoot}})
+
+	viaLink := mustWrite(t, filepath.Join(linkRoot, "Author", "book.epub"))
+	if !roots.Contains(ctx, viaLink) {
+		t.Error("path reached through the symlinked root must be allowed")
+	}
+	if !roots.Contains(ctx, filepath.Join(real, "Author", "book.epub")) {
+		t.Error("path given as the real location of a symlinked root must be allowed")
+	}
+	if !roots.Contains(ctx, filepath.Join(linkRoot, "Author", "gone.epub")) {
+		t.Error("missing file under a symlinked root must still be allowed (already deleted)")
+	}
+	// The same, with the root configured as the real path and the file path
+	// given via the link.
+	roots = NewLibraryRoots(staticRootLister{paths: []string{real}})
+	if !roots.Contains(ctx, viaLink) {
+		t.Error("link path into a real-path root must be allowed")
+	}
+	if roots.Contains(ctx, filepath.Join(t.TempDir(), "x.epub")) {
+		t.Error("unrelated path must be refused")
+	}
+}
+
+// An already deleted file under a normal root must still pass, so a stale row
+// does not stay stuck behind a refusal.
+func TestLibraryRoots_Contains_MissingFileUnderRootAllowed(t *testing.T) {
+	root := t.TempDir()
+	roots := NewLibraryRoots(staticRootLister{paths: []string{root}})
+	if !roots.Contains(context.Background(), filepath.Join(root, "no", "such", "file.epub")) {
+		t.Error("missing file under the root must be allowed")
 	}
 }
 
