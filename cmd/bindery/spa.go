@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -35,6 +36,25 @@ func isStaticAssetPath(p string) bool {
 	return strings.HasPrefix(p, "assets/") || staticAssetExts[strings.ToLower(path.Ext(p))]
 }
 
+// hashedAssetName matches the file names Vite emits for everything under
+// assets/ (name-<hash>.ext, the hash being 8 base64url characters). Chunks,
+// the CSS bundle, the lazily loaded locale files and imported images all come
+// out this way, so the URL changes whenever the content does.
+var hashedAssetName = regexp.MustCompile(`^.+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
+
+// immutableCacheControl lets the browser keep a content hashed file for a year
+// without asking again.
+const immutableCacheControl = "public, max-age=31536000, immutable"
+
+// isHashedAssetPath reports whether p (relative to the frontend root, no
+// leading slash) is a build output whose name carries a content hash, which
+// is the only kind of file that is safe to cache forever. Files copied from
+// web/public (favicon, manifest, theme-bootstrap.js) keep their name across
+// builds, and index.html is the one file that names the current hashes.
+func isHashedAssetPath(p string) bool {
+	return strings.HasPrefix(p, "assets/") && hashedAssetName.MatchString(path.Base(p))
+}
+
 // spaHandler serves the embedded frontend: index.html (with the <base> tag
 // already injected) for the root and for any path that is not a real file,
 // so client side routes survive a reload, and the file itself otherwise.
@@ -56,6 +76,9 @@ func spaHandler(distFS fs.FS, indexHTML []byte) http.HandlerFunc {
 			if ct, ok := staticContentTypes[path.Ext(p)]; ok {
 				// http.FileServer keeps a Content-Type that is already set.
 				w.Header().Set("Content-Type", ct)
+			}
+			if isHashedAssetPath(p) {
+				w.Header().Set("Cache-Control", immutableCacheControl)
 			}
 			fileServer.ServeHTTP(w, r)
 			return

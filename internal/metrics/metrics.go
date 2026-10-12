@@ -153,3 +153,18 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return r.ResponseWriter.Write(b)
 }
+
+// Unwrap lets http.NewResponseController reach the server's own writer through
+// the recorder, for SetWriteDeadline, SetReadDeadline and Hijack. Without it
+// the controller answers ErrNotSupported for every one of them.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Flush passes through to the underlying writer, so a plain w.(http.Flusher)
+// assertion keeps working behind the middleware. Flushing sends the headers,
+// so it counts as having written them.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		r.wroteHeader = true
+		f.Flush()
+	}
+}

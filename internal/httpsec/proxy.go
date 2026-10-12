@@ -307,3 +307,47 @@ func RedirectGuard(policy Policy) func(*http.Request, []*http.Request) error {
 		return nil
 	}
 }
+
+// metadataIdleConnsPerHost is how many idle connections a metadata provider
+// transport keeps per host. net/http keeps 2, so a burst of 8 parallel lookups
+// to one provider (an author refresh fanning out) closes six connections when
+// it ends and pays the TCP and TLS handshakes again on the next burst.
+const metadataIdleConnsPerHost = 16
+
+// MetadataTransport returns the RoundTripper for a metadata provider client
+// (Open Library, Hardcover, Google Books and the like). It is a clone of
+// DefaultProxyTransport, so the configured outbound proxy, its bypass rules and
+// every other field of the base carry over, with a larger idle pool per host.
+// The clone is shared by every caller, as http.DefaultTransport was: some
+// providers are built per request (the Hardcover settings test, the list
+// syncer's client factory), and a clone per call would give each of those its
+// own idle pool, never reused and held open until the idle timeout. The
+// shared http.DefaultTransport that DefaultProxyTransport may return is never
+// mutated. If the base changes (ConfigureOutboundProxy installs a proxy), the
+// next call clones the new base.
+//
+// These providers are fixed public endpoints and were never dial guarded, so
+// the clone adds no guard and removes none; a DialContext on the base survives
+// the clone. Callers that need a policy use GuardedTransport.
+func MetadataTransport() http.RoundTripper {
+	base := DefaultProxyTransport()
+	t, ok := base.(*http.Transport)
+	if !ok {
+		return base
+	}
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+	if metadataBase == base && metadataClone != nil {
+		return metadataClone
+	}
+	c := t.Clone()
+	c.MaxIdleConnsPerHost = metadataIdleConnsPerHost
+	metadataBase, metadataClone = base, c
+	return c
+}
+
+var (
+	metadataMu    sync.Mutex
+	metadataBase  http.RoundTripper
+	metadataClone *http.Transport
+)

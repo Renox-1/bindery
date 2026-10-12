@@ -54,7 +54,7 @@ type Client struct {
 // New creates a new DNB client.
 func New() *Client {
 	return &Client{
-		http: &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http: &http.Client{Timeout: 15 * time.Second, Transport: httpsec.MetadataTransport()},
 		gate: providerhttp.NewGate(),
 	}
 }
