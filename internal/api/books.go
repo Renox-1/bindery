@@ -37,6 +37,8 @@ type BookHandler struct {
 	editions  *db.EditionRepo
 	roots     *LibraryRoots // optional: library-root containment for delete
 
+	coverStore *covers.Store // optional: enables POST /book/{id}/cover
+
 	editionFetcher bookhydrate.EditionFetcher
 
 	// lifetimeCtx is the process-lifecycle context, cancelled on server
@@ -190,7 +192,7 @@ func (h *BookHandler) EnrichAudiobook(w http.ResponseWriter, r *http.Request) {
 		expectedUpdatedAt := book.UpdatedAtRaw
 		if err := h.meta.EnrichAudiobook(ctx, book); err != nil {
 			slog.Warn("audnex enrich failed", "bookId", book.ID, "error", err)
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			writeUpstreamError(w, err)
 			return
 		}
 		var updated bool
@@ -407,11 +409,19 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	cleanBookDescription(book)
-	h.attachBookFiles(r.Context(), book)
-	h.attachBookIdentifiers(r.Context(), book)
-	h.attachImportInFlight(r.Context(), book)
+	h.prepareBookDetail(r.Context(), book)
 	writeBook(w, http.StatusOK, book)
+}
+
+// prepareBookDetail shapes a book as the book page expects it: description
+// cleaned, tracked files, provider identifiers and the import flag attached.
+// GET /book/{id} and every response the page swaps in for its book use it, so
+// a mutation cannot answer with less than the page already had.
+func (h *BookHandler) prepareBookDetail(ctx context.Context, book *models.Book) {
+	cleanBookDescription(book)
+	h.attachBookFiles(ctx, book)
+	h.attachBookIdentifiers(ctx, book)
+	h.attachImportInFlight(ctx, book)
 }
 
 // attachImportInFlight marks a book whose download is still on its way into
@@ -486,8 +496,7 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		ReleaseDate  *string   `json:"releaseDate"`
 		LockedFields *[]string `json:"lockedFields"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Monitored != nil {
@@ -742,7 +751,11 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	// Fallback for books imported before the book_files migration.
 	if len(toDelete) == 0 {
 		book, err := h.books.GetByID(r.Context(), id)
-		if err != nil || book == nil {
+		if err != nil {
+			writeServerError(w, r, err)
+			return
+		}
+		if book == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 			return
 		}
@@ -793,7 +806,11 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Re-load the book to get the refreshed status and file paths.
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -864,7 +881,11 @@ func (h *BookHandler) deleteTrackedBookFile(w http.ResponseWriter, r *http.Reque
 	}
 
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -932,7 +953,11 @@ func (h *BookHandler) deregisterBookFile(w http.ResponseWriter, r *http.Request,
 	}
 
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -1223,8 +1248,7 @@ func (h *BookHandler) Rebind(w http.ResponseWriter, r *http.Request) {
 		ForeignID string `json:"foreign_id"`
 		Force     bool   `json:"force"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Provider = strings.TrimSpace(strings.ToLower(req.Provider))
@@ -1249,7 +1273,7 @@ func (h *BookHandler) Rebind(w http.ResponseWriter, r *http.Request) {
 	upstream, err := h.lookup.GetBookFromProvider(r.Context(), req.Provider, req.ForeignID)
 	if err != nil {
 		slog.Warn("rebind: upstream fetch failed", "bookId", book.ID, "provider", req.Provider, "foreignId", req.ForeignID, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeUpstreamError(w, err)
 		return
 	}
 	if upstream == nil {

@@ -488,7 +488,7 @@ export default function IndexersTab({ indexers, setIndexers, prowlarrInstances, 
                     onClick={async () => {
                       try {
                         const r = await api.testProwlarr(p.id)
-                        setProwlarrTestResult(prev => ({ ...prev, [p.id]: { ok: r.ok === 'true', msg: r.ok === 'true' ? t('settings.prowlarr.connectedVersion', { version: r.version }) : t('settings.prowlarr.connFailed', { error: r.error }) } }))
+                        setProwlarrTestResult(prev => ({ ...prev, [p.id]: { ok: r.ok, msg: r.ok ? t('settings.prowlarr.connectedVersion', { version: r.version }) : t('settings.prowlarr.connFailed', { error: r.error }) } }))
                       } catch (err: unknown) {
                         setProwlarrTestResult(prev => ({ ...prev, [p.id]: { ok: false, msg: err instanceof Error ? err.message : t('settings.prowlarr.connFailedGeneric') } }))
                       }

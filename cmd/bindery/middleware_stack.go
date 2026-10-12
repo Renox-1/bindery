@@ -20,7 +20,10 @@ func useCoreMiddleware(r chi.Router, frameAncestors string) {
 	// headers are ignored — required for local-only auth mode to be safe
 	// against on-network spoofing.
 	r.Use(trustedProxyMiddleware())
-	r.Use(middleware.Recoverer)
+	// api.Recoverer, not chi's: it logs the panic and stack through slog (so
+	// they reach the in-app log buffer) and answers JSON with the request id.
+	// It must stay below middleware.RequestID.
+	r.Use(api.Recoverer)
 	r.Use(compressUnlessDownload(5))
 	r.Use(api.SecurityHeaders(frameAncestors))
 	// Cap JSON / form request bodies at 1 MiB by default so an authenticated

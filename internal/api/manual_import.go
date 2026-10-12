@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -127,6 +127,15 @@ func (h *ManualImportHandler) outsideRootsMessage(ctx context.Context) string {
 	return base + ": " + strings.Join(roots, ", ")
 }
 
+// pathNotAccessible logs why path could not be stat'ed and returns the fixed
+// client-facing text. The os error names the full path and the errno, so it
+// stays in the log. The path has already resolved inside a library root by the
+// time this runs, so reaching it takes a race or a permission change.
+func pathNotAccessible(path string, err error) string {
+	slog.Warn("manual import: path not accessible", "path", path, "error", err)
+	return "path not accessible"
+}
+
 // Lookup handles GET /api/v1/queue/manual-import/lookup?path=...
 // It parses the filename, searches the local catalogue, and returns a match
 // result along with the auto-detected format. No state is modified.
@@ -150,7 +159,7 @@ func (h *ManualImportHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	// points outside it is rejected by ResolveContained above).
 	path = resolved
 	if _, err := os.Stat(path); err != nil { //nolint:gosec // #nosec G304 -- path is symlink-resolved and confirmed inside a configured library root; RequireAdmin middleware enforced at route level
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("path not accessible: %v", err)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": pathNotAccessible(path, err)})
 		return
 	}
 	result, err := h.scanner.Lookup(r.Context(), path)
@@ -216,13 +225,17 @@ func (h *ManualImportHandler) validateImport(ctx context.Context, rawPath string
 	}
 	info, err := os.Stat(path) //nolint:gosec // #nosec G304 -- path is symlink-resolved and confirmed inside a configured library root; RequireAdmin middleware enforced at route level
 	if err != nil {
-		return "", nil, http.StatusBadRequest, fmt.Sprintf("path not accessible: %v", err)
+		return "", nil, http.StatusBadRequest, pathNotAccessible(path, err)
 	}
 	if !info.IsDir() && !importer.IsBookFile(path) {
 		return "", nil, http.StatusBadRequest, "path is not a recognised book file"
 	}
 	book, err := h.books.GetByID(ctx, bookID)
-	if err != nil || book == nil {
+	if err != nil {
+		slog.Error("manual import: book lookup failed", "book", bookID, "error", err)
+		return "", nil, http.StatusInternalServerError, "internal server error"
+	}
+	if book == nil {
 		return "", nil, http.StatusBadRequest, "book not found"
 	}
 	return path, book, 0, ""
@@ -256,8 +269,7 @@ func (h *ManualImportHandler) createManualDownload(ctx context.Context, book *mo
 // kicks off the import asynchronously. Returns 202 with the new record.
 func (h *ManualImportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	var req manualImportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	dl, path, status, msg := h.prepareImport(r.Context(), req.Path, req.BookID, req.Format)
@@ -307,8 +319,7 @@ type reassignLinkResponse struct {
 // the async import.
 func (h *ManualImportHandler) Reassign(w http.ResponseWriter, r *http.Request) {
 	var req reassignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Path) == "" {
@@ -441,12 +452,16 @@ func (h *ManualImportHandler) ReassignPreview(w http.ResponseWriter, r *http.Req
 	}
 	path = resolved
 	if _, statErr := os.Stat(path); statErr != nil { //nolint:gosec // #nosec G304 -- path is symlink-resolved and confirmed inside a configured library root; RequireAdmin middleware enforced at route level
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("path not accessible: %v", statErr)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": pathNotAccessible(path, statErr)})
 		return
 	}
 	preview, err := h.scanner.PreviewImportDestination(r.Context(), bookID, path, format)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	switch {
+	case errors.Is(err, importer.ErrPreviewBookNotFound):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book not found"})
+		return
+	case err != nil:
+		writeServerError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, reassignPreviewResponse{
@@ -679,7 +694,7 @@ func (h *ManualImportHandler) resolveImportFolder(ctx context.Context, rawPath s
 	}
 	info, err := os.Stat(resolved) //nolint:gosec // #nosec G304 -- resolved by ResolveContained after symlink-aware root containment; route requires admin
 	if err != nil {
-		return "", http.StatusBadRequest, fmt.Sprintf("path not accessible: %v", err)
+		return "", http.StatusBadRequest, pathNotAccessible(resolved, err)
 	}
 	if !info.IsDir() {
 		return "", http.StatusBadRequest, "path must be a folder; use lookup for a single book"
@@ -889,8 +904,7 @@ const (
 // with bounded concurrency. Returns 202 with the per-item validation results.
 func (h *ManualImportHandler) ImportBatch(w http.ResponseWriter, r *http.Request) {
 	var items []BatchImportItem
-	if err := json.NewDecoder(r.Body).Decode(&items); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &items) {
 		return
 	}
 	if len(items) == 0 {
@@ -1074,8 +1088,7 @@ type matchDownloadRequest struct {
 // re-imports against the now-assigned book on its next poll.
 func (h *ManualImportHandler) MatchDownload(w http.ResponseWriter, r *http.Request) {
 	var req matchDownloadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.DownloadID <= 0 || req.BookID <= 0 {
@@ -1101,7 +1114,11 @@ func (h *ManualImportHandler) MatchDownload(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	book, err := h.books.GetByID(ctx, req.BookID)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book not found"})
 		return
 	}

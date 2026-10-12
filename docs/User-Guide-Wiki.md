@@ -807,19 +807,31 @@ like everything else on that tab that names server paths.
   (Settings → Metadata Profiles → Library Defaults) offers OpenLibrary,
   **DNB** (German National Library), **Nasjonalbiblioteket** (National Library
   of Norway: Norwegian books under their original titles, only used when chosen
-  as primary), and **Hardcover**. Switching the primary away from
-  Nasjonalbiblioteket switches it off entirely, so authors linked to it stop
-  syncing until you relink each one with "Link metadata" on their page.
+  as primary), **BnF** (Bibliothèque nationale de France: French editions under
+  their French titles, translations included, only used when chosen as primary),
+  and **Hardcover**. Switching the primary away from Nasjonalbiblioteket or BnF
+  switches it off entirely, so authors linked to it stop syncing until you
+  relink each one with "Link metadata" on their page.
+- **BnF** suits a library of French editions whose indexers name releases
+  after the French title ("Alice au pays des merveilles", not "Alice's
+  Adventures in Wonderland"). Its data is under the Licence Ouverte / Open
+  Licence 2.0, credited in Settings where you choose it, and each BnF book and
+  author page shows the credit with the date its record was retrieved;
+  Bindery fetches no covers from BnF, so covers come from the other
+  providers. BnF is moving its catalogue to a new record model until the end
+  of 2026, and records created since June 2026 are not yet linked to their
+  author, so Bindery finds those by the author's name, only when no other
+  person in BnF's authority file has the same name, and treats an author's
+  BnF catalogue as possibly
+  incomplete: catalogue reconciliation never offers to remove a book because
+  BnF did not list it. BnF publishes no rate limit, so Bindery sends it at most
+  one request a second; refreshing an author with a long catalogue can take
+  around fifteen seconds.
 - **Hardcover** is an enricher by default — it improves search results,
   ratings, and series data, and powers import lists and the Discover wishlist
   row. **Without an API token (Settings → API Keys) Hardcover is silently
   skipped everywhere.** The free token is the single highest-value config for
   metadata quality.
-- **Covers from your own files.** When no metadata provider has a cover for
-  a book, Bindery uses the art embedded in the file you import (M4B, MP3,
-  FLAC, EPUB), or a `cover.jpg` / `folder.jpg` in a multi-file audiobook's
-  folder. Books already in your library pick theirs up on the next library
-  scan. A provider's cover is never replaced, so this only fills blanks.
 
   It can also be promoted to *primary*, which is worth doing if OpenLibrary
   refreshes bury your wanted list in translations and box sets. Hardcover's
@@ -853,6 +865,15 @@ like everything else on that tab that names server paths.
   to a small sample of its editions (and a cover in the sampled language) only
   for what that edition lacks. **Reconcile catalogue** treats a
   failed lookup as indeterminate rather than offering the row for removal.
+- **Covers from your own files.** When no metadata provider has a cover for
+  a book, Bindery uses the art embedded in the file you import (M4B, MP3,
+  FLAC, EPUB), or a `cover.jpg` / `folder.jpg` in a multi-file audiobook's
+  folder. Books already in your library pick theirs up on the next library
+  scan. A provider's cover is never replaced, so this only fills blanks.
+- **Your own cover.** **Upload cover** (or **Change cover**) under a book's
+  cover sets it from a JPEG, PNG, WebP or GIF image of up to 10 MB. It
+  replaces whatever cover the book had, and a refresh keeps it, since
+  refresh only fills an empty cover.
 - **Google Books** (free API key) and **Audnexus/Audible** (audiobook
   narrator, duration, by ASIN) enrich further.
 
@@ -898,8 +919,8 @@ bound to with a copy button, and lists any other provider ids the same book is
 known by. That is the thing to check before deciding a book needs re-binding,
 and the id is what to quote in a bug report. Hover or activate **Links** while
 confirming a book in the Add to library dialog or in the book header to open
-trustworthy upstream pages for OpenLibrary, Google Books, Hardcover, DNB and
-Nasjonalbiblioteket records.
+trustworthy upstream pages for OpenLibrary, Google Books, Hardcover, DNB,
+Nasjonalbiblioteket and BnF records.
 Calibre and Audiobookshelf ids remain visible only under **Metadata source**
 because they do not map to stable public pages.
 

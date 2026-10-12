@@ -138,8 +138,7 @@ func (h *ImportListHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// that the syncer reads MonitorNew (#2124): an API client that never sends
 	// the flag must keep the historical download-everything behaviour.
 	il := models.ImportList{MonitorNew: true, AutoAdd: true}
-	if err := json.NewDecoder(r.Body).Decode(&il); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &il) {
 		return
 	}
 	if il.Name == "" {
@@ -172,14 +171,17 @@ func (h *ImportListHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existing, err := h.repo.GetByID(r.Context(), id)
-	if err != nil || existing == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if existing == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "import list not found"})
 		return
 	}
 	il := *existing
 	raw := map[string]json.RawMessage{}
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &raw) {
 		return
 	}
 	if err := applyImportListPatch(&il, raw); err != nil {
@@ -263,8 +265,7 @@ func (h *ImportListHandler) ListExclusions(w http.ResponseWriter, r *http.Reques
 
 func (h *ImportListHandler) CreateExclusion(w http.ResponseWriter, r *http.Request) {
 	var e models.ImportListExclusion
-	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &e) {
 		return
 	}
 	if e.ForeignID == "" {

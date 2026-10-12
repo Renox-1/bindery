@@ -33,6 +33,43 @@ The API key lives in **Settings → General → Security**. Regenerating it inva
 
 The Calibre bridge routes under `/bridge/v1` are outside all of this: they take only the Calibre plugin key as a Bearer token, in every auth mode. See [Calibre bridge (pull)](#calibre-bridge-pull).
 
+## Error format
+
+Every error from `/api` and `/api/v1` is JSON with an `error` string:
+
+```json
+{"error": "indexer not found"}
+```
+
+The text is written for people to read and is safe to show. Messages that come from Bindery itself (validation, not found) are specific. Anything that came from the database, the filesystem or another service is replaced with a fixed message and logged on the server, so an error never carries a connection string, a path or an upstream API key.
+
+| Status | Meaning |
+|---|---|
+| 400 | The request is invalid: a malformed body is `invalid request body`, other validation failures name the field |
+| 401 | Not authenticated |
+| 403 | Authenticated but not allowed, or a browser request missing the CSRF header |
+| 404 | No such route (`{"error": "not found"}`), or no such row. A row you may not see is also 404, never 403 |
+| 405 | The route exists but not for that method (`{"error": "method not allowed"}`). The `Allow` header lists the methods that do work |
+| 409 | The request conflicts with current state |
+| 413 | The request body is larger than the limit, `{"error": "request body too large"}`. JSON bodies are limited to 1 MiB; uploads have their own, larger limits. This used to be a 400. Endpoints are being moved over one group at a time: a few older ones, such as creating an author, still answer `400 invalid request body` for an oversize body |
+| 429 | Too many attempts |
+| 500 | A server fault: `{"error": "internal server error"}`. A store error is never reported as a 404. When the fault was an unexpected crash the body also carries `request_id`, which matches the `request_id` on the log entry in Settings, Logs |
+| 502 | Another service failed: a metadata provider, an indexer, a download client or Prowlarr. The message is generic, except on the connection test endpoints, which relay the first line of what the other service said with credentials redacted, at most 200 characters |
+
+Unknown paths under `/api` and `/api/v1` answer the JSON 404 above, and a wrong method answers the JSON 405. They used to be plain text and an empty body. An unauthenticated request to an unknown path still gets `401`, not `404`.
+
+A few endpoints are tests and report a failed check inside a `200`, because the request itself worked:
+
+| Endpoint | Failure looks like |
+|---|---|
+| `POST /api/v1/indexer/{id}/test` and `POST /api/v1/indexer/test` | `{"ok": false, "error": "..."}` |
+| `POST /api/v1/prowlarr/{id}/test` | `{"ok": false, "error": "..."}`. `ok` is a JSON boolean; it was the string `"true"` or `"false"` before |
+| `POST /api/v1/auth/oidc/test-discovery` | `{"ok": false, "error": "..."}` |
+
+The download client test endpoints are not in this list: they answer `502` with the error when the client cannot be reached.
+
+Outside these trees the format differs on purpose. The Calibre bridge adds a machine readable `code` (see [Calibre bridge (pull)](#calibre-bridge-pull)). OPDS feeds and file downloads answer in the protocol they serve, and the cover image proxy errors are plain text.
+
 ## Endpoint catalogue (selection)
 
 ### Authors
@@ -193,6 +230,14 @@ move that author onto the fallback (#2271). Retry once the primary is
 answering, or send an explicit `foreignAuthorId`, which skips the search
 entirely.
 
+Any other provider failure on a relink, a relink candidate search, a book
+rebind, an audiobook enrich or an add book answers **502** with the fixed
+message `metadata provider unavailable`, except while the provider is paused
+(a daily quota or a rejected token), which says so and when it ends. The
+provider's own error text embeds
+its request URL (and so an API key and the resolver address), so it goes to the
+Bindery log and not to the client.
+
 `GET /api/v1/author/{id}/duplicate-candidates` reports groups of the author's
 books whose titles look like the same book, for human review (#1970). It is
 read-only: it never writes, and the review UI's only action is the existing
@@ -295,6 +340,7 @@ PUT    /api/v1/book/{id}/exclude                  exclude from future searches
 GET    /api/v1/book/{id}/series-exclusions        the series the book was taken out of: [{seriesForeignId, seriesId, seriesTitle, position}]; seriesId is 0 when nothing resolves the id any more
 POST   /api/v1/book/{id}/rebind                   re-link to a different metadata record
 POST   /api/v1/book/{id}/enrich-audiobook         pull narrator/duration/cover from Audnex
+POST   /api/v1/book/{id}/cover                    set the cover from the request body (raw JPEG, PNG, WebP or GIF, max 10 MB); stored locally, and a refresh does not replace it
 POST   /api/v1/book/{id}/search                   manual indexer search
 GET    /api/v1/book/{id}/file                     download the imported file (auth required; `?path=…` serves one specific tracked file, for a book holding several of a format; `?format=ebook|audiobook` picks the format on dual-format books; `?path=` wins when both are sent)
 GET    /api/v1/book/{id}/calibre                  where the book stands in the Calibre delivery queue (see Calibre below)
@@ -400,11 +446,15 @@ GET    /api/v1/prowlarr/{id}                      fetch one (admin)
 POST   /api/v1/prowlarr                           add a Prowlarr server (admin)
 PUT    /api/v1/prowlarr/{id}                      update (admin)
 DELETE /api/v1/prowlarr/{id}                      remove (admin)
-POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin)
-POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr (admin)
+POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin); always 200 with a boolean "ok"
+                                                  (and "version" when true). When false, "error" is the first
+                                                  line of what Prowlarr said, redacted, at most 200 characters
+POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr (admin); 502 with the same
+                                                  shortened "error" when Prowlarr fails
 
 GET    /api/v1/rootfolder                         list library roots
-POST   /api/v1/rootfolder                         add a new root (admin)
+POST   /api/v1/rootfolder                         add a new root (admin); 400 says whether the path is
+                                                  missing, unreadable or under a file
 DELETE /api/v1/rootfolder/{id}                    remove (admin)
 ```
 
@@ -564,6 +614,13 @@ POST   /api/v1/queue/grab                         submit a search result to the 
                                                   "forceAvailable":true means it is your own imported row and
                                                   the same grab with "force":true re-grabs it (reuses the row,
                                                   removes nothing from the client)
+                                                  400 with "code":"no_download_client" when no enabled client
+                                                  can take the release (the message names the protocol); 502
+                                                  "failed to send the release to the download client" when the
+                                                  client refused it or could not be reached (the cause is in
+                                                  the log and on the queue row; a refused or timed out
+                                                  connection adds Bindery's own hint); 500 for a storage fault.
+                                                  /queue/{id}/retry answers the same way
 POST   /api/v1/queue/{id}/retry-import           retry an importFailed/importBlocked item without re-downloading
 POST   /api/v1/queue/{id}/retry                   re-send a failed item's release to the download client (no re-search)
 POST   /api/v1/queue/bulk-retry                   retry many; {"ids":[..]}; per id {"ok":true,"action":"import"|"resend"}
@@ -574,7 +631,8 @@ DELETE /api/v1/queue/{id}                         remove (also from the download
 POST   /api/v1/queue/bulk-delete                  remove many; {"ids":[..],"deleteFiles":false,"unmonitorBooks":false,"removeFromClient":true}
 
 GET    /api/v1/pending                            grabs awaiting delay-profile clearance
-POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately
+POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately; answers like
+                                                  /queue/grab (400 "no_download_client", 502 send failure)
 
 GET    /api/v1/queue/manual-import/lookup         parse + catalogue-match one path (admin)
 GET    /api/v1/queue/manual-import/scan           enumerate + match book units under a folder (admin)
@@ -698,6 +756,16 @@ the saved client's `id` and the handler fills in a credential you left blank
 from that row, but only while `type`, `host`, `port`, `useSsl` and `urlBase`
 still match it. Point the probe anywhere else and it runs with whatever
 credential the body carried.
+
+Both probes (`POST /api/v1/downloadclient/test` and
+`POST /api/v1/downloadclient/{id}/test`) answer `400` for a host or URL Bindery
+refuses to call, and `502` when the client was called and the probe failed. The
+`error` of a `502` is never the raw failure text. A refused or timed out
+connection names the client and the host and port you configured, then Bindery's
+own hint for it (`could not reach SABnzbd at 192.168.1.5:8080 (connection
+refused, check the port ...)`), with no URL in it; anything else is the first
+line of what the client said, credentials redacted, at most 200 characters. The
+full text is in the Bindery log.
 
 #### Diagnosing a download client
 
@@ -1057,6 +1125,7 @@ Errors are JSON `{"error": "...", "code": "..."}`:
 | 409 | `not_in_pull_mode` | a delivery route while mode is not `plugin` or transport is not `pull` |
 | 409 | `not_pending` | ack or nack of a row that already failed, was skipped, or was delivered to another Calibre id |
 | 429 | `rate_limited` | too many failed attempts from this address |
+| 500 | `internal` | a store or filesystem fault; the detail is in the server log, never in the body |
 
 `GET /bridge/v1/hello` answers in push too, so the plugin can report that
 Bindery is not in pull mode:
@@ -1207,7 +1276,7 @@ GET    /api/v1/auth/oidc/{provider}/callback      OIDC redirect target
 GET    /api/v1/auth/users                         list users (admin)
 POST   /api/v1/auth/users                         create (admin)
 DELETE /api/v1/auth/users/{id}                    delete (admin)
-PUT    /api/v1/auth/users/{id}/role               change role (admin), body {"role": "admin"|"user"|"requester"}
+PUT    /api/v1/auth/users/{id}/role               change role (admin), body {"role": "admin"|"user"|"requester"}; 404 for an unknown user
 PUT    /api/v1/auth/users/{id}/auto-approve       per-account request auto-approval (admin), body {"enabled": true|false}
 PUT    /api/v1/auth/users/{id}/reset-password     reset (admin)
 ```
