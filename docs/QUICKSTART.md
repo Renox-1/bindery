@@ -60,7 +60,11 @@ point Bindery at a Prowlarr instance.
 - **API Key** — from the indexer.
 - **Categories** — comma-separated Newznab category IDs. Default `7020`
   (eBooks); `3030` is Audiobooks. Add custom IDs for indexers with
-  non-standard categories.
+  non-standard categories. A tracker that files its books under the Newznab
+  Other bucket can be set to `8000`: when an indexer lists nothing in the Books
+  (`7xxx`) or Audio (`3xxx`) range, Bindery searches the `8xxx` IDs it does
+  list as typed. If it lists no `8xxx` ID either, Bindery falls back to `7020`
+  for ebooks and `3030` for audiobooks.
 - **Include broad parent categories** — disabled by default. Enable it for an
   indexer that files releases loosely under Books (`7000`) or Audio (`3000`)
   rather than a specific child. Bindery then adds that parent to searches

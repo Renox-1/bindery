@@ -1155,7 +1155,7 @@
         "apiKeyEditHint": "The saved key is never sent back to the browser. Leave this blank to keep it, or type a new one to replace it.",
         "categories": "Categories",
         "categoriesPlaceholder": "Categories (e.g. 7020, 7120, 3030)",
-        "categoriesHint": "Comma-separated Newznab category IDs. 7020 = eBooks, 3030 = Audiobooks. Add custom IDs for indexers with non-standard categories (e.g. 7120 for German books).",
+        "categoriesHint": "Comma-separated Newznab category IDs. 7020 = eBooks, 3030 = Audiobooks. Add custom IDs for indexers with non-standard categories (e.g. 7120 for German books, or 8000 for a tracker that files books under Other).",
         "includeParentCategories": "Include broad parent categories",
         "includeParentCategoriesHint": "Search Books (7000) or Audio (3000) in addition to specific subcategories. This may find releases missed by incomplete mappings, but may also return comics, magazines, music, or other unrelated results.",
         "priority": "Priority",
