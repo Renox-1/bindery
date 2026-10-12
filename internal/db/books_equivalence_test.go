@@ -243,6 +243,9 @@ func TestBookQueries_EquivalentToCTEShape(t *testing.T) {
 			}
 			out = append(out, vals)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		return out
 	}
 	oldRaw := rawDump(oldBookColumns, oldBookJoins, oldBookCTE)
