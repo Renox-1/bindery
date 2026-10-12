@@ -680,6 +680,15 @@ checks the live schema and restores that additive column automatically. Take a
 normal SQLite backup before upgrading; no manual SQL is required for this
 specific repair.
 
+### Duplicate key recompute (v1.42.0)
+
+The key Bindery stores in `books.dedup_key` to recognise the same book twice now
+folds a title filed with its article last (`Trace of Death, A` and `A Trace of
+Death`, #3122), so it is rewritten for every book once, on the first start after
+the upgrade. It runs during startup, before Bindery begins serving, and adds no schema
+migration; on a development machine 100,000 books took about 1.4 seconds. Rows that now share a key are neither merged nor removed: they
+show up together in **Review duplicates** for you to decide.
+
 ### Calibre library covers repair
 
 Versions before the #2564 fix stored each Calibre-imported book's cover as the library's absolute path in `editions.image_url`, which nothing could serve. On every start Bindery now runs a background pass over such rows: each readable `cover.jpg` is copied into `covers/` under `BINDERY_DATA_DIR` and the edition (and the book, when it has no provider cover) is repointed at the copy. No schema migration is involved. The Calibre library must be mounted at the path recorded in the rows for the pass to read the files; rows it cannot read are left untouched and retried on the next start, and a library import rewrites them as well. Progress is logged as `calibre cover repair finished` at `info`.
