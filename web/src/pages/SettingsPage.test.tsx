@@ -284,7 +284,7 @@ function seedSettingsMocks(options: {
   vi.mocked(api.listProwlarr).mockResolvedValue(options.prowlarr ?? [])
   vi.mocked(api.addProwlarr).mockImplementation(async data => makeProwlarr({ id: 300, ...data }))
   vi.mocked(api.syncProwlarr).mockResolvedValue({ added: 0, updated: 0, removed: 0 })
-  vi.mocked(api.testProwlarr).mockResolvedValue({ ok: 'true', version: '1.0.0' })
+  vi.mocked(api.testProwlarr).mockResolvedValue({ ok: true, version: '1.0.0' })
   vi.mocked(api.deleteProwlarr).mockResolvedValue(undefined)
 
     vi.mocked(api.absConfig).mockResolvedValue({ featureEnabled: false, baseUrl: '', label: '', enabled: false, libraryId: '', libraryIds: [], pathRemap: '', apiKeyConfigured: false })

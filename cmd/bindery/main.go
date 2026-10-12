@@ -881,7 +881,10 @@ func main() {
 	// headers are ignored — required for local-only auth mode to be safe
 	// against on-network spoofing.
 	r.Use(trustedProxyMiddleware())
-	r.Use(middleware.Recoverer)
+	// api.Recoverer, not chi's: it logs the panic and stack through slog (so
+	// they reach the in-app log buffer) and answers JSON with the request id.
+	// It must stay below middleware.RequestID.
+	r.Use(api.Recoverer)
 	r.Use(middleware.Compress(5))
 	r.Use(api.SecurityHeaders(cfg.FrameAncestors))
 	// Cap JSON / form request bodies at 1 MiB by default so an authenticated
@@ -927,12 +930,14 @@ func main() {
 
 	r.Route("/api", func(r chi.Router) {
 		useAPIAuth(r, authProvider)
+		registerAPIErrorHandlers(r)
 
 		r.Get("/queue", queueHandler.ListArrCompatible)
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
 		useAPIAuth(r, authProvider)
+		registerAPIErrorHandlers(r)
 
 		// System
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

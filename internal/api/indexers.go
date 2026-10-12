@@ -276,7 +276,11 @@ func (h *IndexerHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idx, err := h.indexers.GetByID(r.Context(), id)
-	if err != nil || idx == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if idx == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
 		return
 	}
@@ -285,8 +289,7 @@ func (h *IndexerHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *IndexerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var idx models.Indexer
-	if err := json.NewDecoder(r.Body).Decode(&idx); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &idx) {
 		return
 	}
 	if idx.Name == "" || idx.URL == "" {
@@ -351,7 +354,11 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existing, err := h.indexers.GetByID(r.Context(), id)
-	if err != nil || existing == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if existing == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
 		return
 	}
@@ -361,7 +368,7 @@ func (h *IndexerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// MaxRequestBody bounds it.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeBodyReadError(w, err)
 		return
 	}
 
@@ -454,7 +461,11 @@ func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idx, err := h.indexers.GetByID(r.Context(), id)
-	if err != nil || idx == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if idx == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "indexer not found"})
 		return
 	}
@@ -492,8 +503,7 @@ func (h *IndexerHandler) Test(w http.ResponseWriter, r *http.Request) {
 // Test, a reachable-but-failed probe returns HTTP 200 with the error inline.
 func (h *IndexerHandler) TestConfig(w http.ResponseWriter, r *http.Request) {
 	var idx models.Indexer
-	if err := json.NewDecoder(r.Body).Decode(&idx); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &idx) {
 		return
 	}
 	if idx.URL == "" {
@@ -532,7 +542,11 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	book, err := h.books.GetByID(r.Context(), bookID)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}

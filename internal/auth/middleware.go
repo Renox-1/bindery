@@ -777,8 +777,11 @@ func RequireXRequestedWith(next http.Handler) http.Handler {
 				logCSRFRejection("x_requested_with", r,
 					"request is not API-key-authenticated and X-Requested-With is not the UI value",
 					"x_requested_with_present", r.Header.Get("X-Requested-With") != "")
+				// Not http.Error: it resets Content-Type to text/plain, which
+				// mislabelled this JSON body.
 				w.Header().Set("Content-Type", "application/json")
-				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"forbidden"}` + "\n"))
 				return
 			}
 		}

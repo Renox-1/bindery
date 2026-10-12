@@ -486,8 +486,7 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		ReleaseDate  *string   `json:"releaseDate"`
 		LockedFields *[]string `json:"lockedFields"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Monitored != nil {
@@ -742,7 +741,11 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	// Fallback for books imported before the book_files migration.
 	if len(toDelete) == 0 {
 		book, err := h.books.GetByID(r.Context(), id)
-		if err != nil || book == nil {
+		if err != nil {
+			writeServerError(w, r, err)
+			return
+		}
+		if book == nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 			return
 		}
@@ -793,7 +796,11 @@ func (h *BookHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Re-load the book to get the refreshed status and file paths.
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -864,7 +871,11 @@ func (h *BookHandler) deleteTrackedBookFile(w http.ResponseWriter, r *http.Reque
 	}
 
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -932,7 +943,11 @@ func (h *BookHandler) deregisterBookFile(w http.ResponseWriter, r *http.Request,
 	}
 
 	book, err := h.books.GetByID(r.Context(), id)
-	if err != nil || book == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if book == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
@@ -1223,8 +1238,7 @@ func (h *BookHandler) Rebind(w http.ResponseWriter, r *http.Request) {
 		ForeignID string `json:"foreign_id"`
 		Force     bool   `json:"force"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	req.Provider = strings.TrimSpace(strings.ToLower(req.Provider))

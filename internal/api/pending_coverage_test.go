@@ -218,8 +218,8 @@ func TestPendingDeleteBadIDNotFoundAndDBError(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	h.Grab(rec, covQPendingReq(1))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("closed db grab: %d, want 404", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("closed db grab: %d, want 500 (a store fault is not a missing release)", rec.Code)
 	}
 }
 
@@ -254,5 +254,29 @@ func TestPendingRedactReleaseJSONLeavesUnparseableAndCleanBlobs(t *testing.T) {
 		if got := redactReleaseJSON(raw); got != raw {
 			t.Errorf("redactReleaseJSON(%q) = %q, want it unchanged", raw, got)
 		}
+	}
+}
+
+// TestPendingGrabWithNoEnabledClientIs400WithCode: a setup problem the user can
+// fix answers 400 with the code the web app keys on, the same as the queue
+// grab route, and the pending row is kept.
+func TestPendingGrabWithNoEnabledClientIs400WithCode(t *testing.T) {
+	f := covQNewPendingGrab(t, models.MediaTypeEbook)
+	if _, err := f.database.Exec("UPDATE download_clients SET enabled = 0"); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.grab(t, covQPendingReq(f.prID))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s, want 400", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != codeNoDownloadClient {
+		t.Fatalf("body = %v, want code %q", body, codeNoDownloadClient)
+	}
+	if left, _ := f.pending.List(context.Background()); len(left) != 1 {
+		t.Fatalf("pending row was removed after a refused grab: %+v", left)
 	}
 }

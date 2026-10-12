@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -186,9 +185,10 @@ func (h *MigrateHandler) ImportReadarrStatus(w http.ResponseWriter, _ *http.Requ
 }
 
 // acceptUpload reads a multipart "file" field with a size cap, returning
-// the file reader. Caller must Close. Passing w to MaxBytesReader makes the
-// server respond 413 Request Entity Too Large automatically when the body
-// exceeds maxBytes, instead of the handler seeing a generic parse error.
+// the file reader. Caller must Close. The body is wrapped in MaxBytesReader, so
+// a body past maxBytes surfaces as a *http.MaxBytesError from the parse below
+// (MaxBytesReader does not write a response itself; w only lets it close the
+// connection). writeUploadError maps that error to 413.
 func acceptUpload(w http.ResponseWriter, r *http.Request, maxBytes int64) (io.ReadCloser, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -268,8 +268,7 @@ func (h *MigrateHandler) ImportGoodreadsCommit(w http.ResponseWriter, r *http.Re
 	var body struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 	body.Token = strings.TrimSpace(body.Token)

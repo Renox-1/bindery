@@ -126,11 +126,11 @@ func opdsAuthWith(p auth.Provider, users *db.UserRepo, limiter *auth.LoginLimite
 				switch basic.check(r.Context(), limiter, ip, name, password, hash, known) {
 				case opdsBasicLimited:
 					w.Header().Set("WWW-Authenticate", `Basic realm="Bindery OPDS"`)
-					http.Error(w, "too many attempts", http.StatusTooManyRequests)
+					writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts"})
 					return
 				case opdsBasicAbandoned:
 					// Client went away while queued for a KDF slot.
-					http.Error(w, "server busy, try again", http.StatusServiceUnavailable)
+					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server busy, try again"})
 					return
 				case opdsBasicOK:
 					// The password is correct, but a requester may not read

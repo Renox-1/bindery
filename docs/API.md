@@ -33,6 +33,43 @@ The API key lives in **Settings → General → Security**. Regenerating it inva
 
 The Calibre bridge routes under `/bridge/v1` are outside all of this: they take only the Calibre plugin key as a Bearer token, in every auth mode. See [Calibre bridge (pull)](#calibre-bridge-pull).
 
+## Error format
+
+Every error from `/api` and `/api/v1` is JSON with an `error` string:
+
+```json
+{"error": "indexer not found"}
+```
+
+The text is written for people to read and is safe to show. Messages that come from Bindery itself (validation, not found) are specific. Anything that came from the database, the filesystem or another service is replaced with a fixed message and logged on the server, so an error never carries a connection string, a path or an upstream API key.
+
+| Status | Meaning |
+|---|---|
+| 400 | The request is invalid: a malformed body is `invalid request body`, other validation failures name the field |
+| 401 | Not authenticated |
+| 403 | Authenticated but not allowed, or a browser request missing the CSRF header |
+| 404 | No such route (`{"error": "not found"}`), or no such row. A row you may not see is also 404, never 403 |
+| 405 | The route exists but not for that method (`{"error": "method not allowed"}`). The `Allow` header lists the methods that do work |
+| 409 | The request conflicts with current state |
+| 413 | The request body is larger than the limit, `{"error": "request body too large"}`. JSON bodies are limited to 1 MiB; uploads have their own, larger limits. This used to be a 400. Endpoints are being moved over one group at a time: a few older ones, such as creating an author, still answer `400 invalid request body` for an oversize body |
+| 429 | Too many attempts |
+| 500 | A server fault: `{"error": "internal server error"}`. A store error is never reported as a 404. When the fault was an unexpected crash the body also carries `request_id`, which matches the `request_id` on the log entry in Settings, Logs |
+| 502 | Another service failed: a metadata provider, an indexer, a download client or Prowlarr. The message is generic, except on the connection test endpoints, which relay the first line of what the other service said with credentials redacted, at most 200 characters |
+
+Unknown paths under `/api` and `/api/v1` answer the JSON 404 above, and a wrong method answers the JSON 405. They used to be plain text and an empty body. An unauthenticated request to an unknown path still gets `401`, not `404`.
+
+A few endpoints are tests and report a failed check inside a `200`, because the request itself worked:
+
+| Endpoint | Failure looks like |
+|---|---|
+| `POST /api/v1/indexer/{id}/test` and `POST /api/v1/indexer/test` | `{"ok": false, "error": "..."}` |
+| `POST /api/v1/prowlarr/{id}/test` | `{"ok": false, "error": "..."}`. `ok` is a JSON boolean; it was the string `"true"` or `"false"` before |
+| `POST /api/v1/auth/oidc/test-discovery` | `{"ok": false, "error": "..."}` |
+
+The download client test endpoints are not in this list: they answer `502` with the error when the client cannot be reached.
+
+Outside these trees the format differs on purpose. The Calibre bridge adds a machine readable `code` (see [Calibre bridge (pull)](#calibre-bridge-pull)). OPDS feeds and file downloads answer in the protocol they serve, and the cover image proxy errors are plain text.
+
 ## Endpoint catalogue (selection)
 
 ### Authors
@@ -408,9 +445,9 @@ GET    /api/v1/prowlarr/{id}                      fetch one (admin)
 POST   /api/v1/prowlarr                           add a Prowlarr server (admin)
 PUT    /api/v1/prowlarr/{id}                      update (admin)
 DELETE /api/v1/prowlarr/{id}                      remove (admin)
-POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin); always 200, with "ok":"false" and
-                                                  "error" (the first line of what Prowlarr said, redacted, at
-                                                  most 200 characters) when the probe fails
+POST   /api/v1/prowlarr/{id}/test                 probe connectivity (admin); always 200 with a boolean "ok"
+                                                  (and "version" when true). When false, "error" is the first
+                                                  line of what Prowlarr said, redacted, at most 200 characters
 POST   /api/v1/prowlarr/{id}/sync                 import indexers from Prowlarr (admin); 502 with the same
                                                   shortened "error" when Prowlarr fails
 
@@ -593,7 +630,8 @@ DELETE /api/v1/queue/{id}                         remove (also from the download
 POST   /api/v1/queue/bulk-delete                  remove many; {"ids":[..],"deleteFiles":false,"unmonitorBooks":false,"removeFromClient":true}
 
 GET    /api/v1/pending                            grabs awaiting delay-profile clearance
-POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately
+POST   /api/v1/pending/{id}/grab                  promote pending to queue immediately; answers like
+                                                  /queue/grab (400 "no_download_client", 502 send failure)
 
 GET    /api/v1/queue/manual-import/lookup         parse + catalogue-match one path (admin)
 GET    /api/v1/queue/manual-import/scan           enumerate + match book units under a folder (admin)
@@ -1086,6 +1124,7 @@ Errors are JSON `{"error": "...", "code": "..."}`:
 | 409 | `not_in_pull_mode` | a delivery route while mode is not `plugin` or transport is not `pull` |
 | 409 | `not_pending` | ack or nack of a row that already failed, was skipped, or was delivered to another Calibre id |
 | 429 | `rate_limited` | too many failed attempts from this address |
+| 500 | `internal` | a store or filesystem fault; the detail is in the server log, never in the body |
 
 `GET /bridge/v1/hello` answers in push too, so the plugin can report that
 Bindery is not in pull mode:

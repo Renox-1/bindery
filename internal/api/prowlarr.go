@@ -228,14 +228,15 @@ func (h *ProwlarrHandler) Test(w http.ResponseWriter, r *http.Request) {
 	client := h.newClient(r.Context(), p.URL, p.APIKey)
 	version, err := client.Test(r.Context())
 	if err != nil {
-		// Stays a 200 with ok "false": that is the documented shape of this
-		// test endpoint, and the web app reads the reason from the body. The
-		// reason is the first line of what Prowlarr said, redacted and capped.
+		// Stays a 200 with ok false: this is a test endpoint, and the web app
+		// reads the reason from the body. The reason is the first line of what
+		// Prowlarr said, redacted and capped. ok is a JSON boolean (it was the
+		// string "true" or "false" before).
 		slog.Warn("prowlarr test failed", "id", id, "error", err)
-		writeJSON(w, http.StatusOK, map[string]string{"ok": "false", "error": upstreamDetail(err.Error())})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": upstreamDetail(err.Error())})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"ok": "true", "version": version})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version})
 }
 
 func (h *ProwlarrHandler) Sync(w http.ResponseWriter, r *http.Request) {

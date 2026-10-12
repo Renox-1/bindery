@@ -140,7 +140,11 @@ func (h *HistoryHandler) Blocklist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event, err := h.history.GetByID(r.Context(), id)
-	if err != nil || event == nil {
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if event == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "history event not found"})
 		return
 	}

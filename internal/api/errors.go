@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/vavallee/bindery/internal/httpsec"
 )
 
@@ -39,13 +41,61 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err == nil {
 		return true
 	}
+	writeBodyReadError(w, err)
+	return false
+}
+
+// writeBodyReadError answers a failure to read or decode a request body:
+// 413 when the body ran past the cap installed by MaxRequestBody or
+// WithMaxBody (http.MaxBytesReader reports *http.MaxBytesError), otherwise a
+// 400 with a fixed message. Handlers that buffer the body themselves
+// (io.ReadAll) use this directly; everything else goes through decodeJSON.
+func writeBodyReadError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
-		return false
+		return
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-	return false
+}
+
+// NotFoundJSON answers a request that matched no route on the API
+// sub-routers with the standard JSON error shape, where chi's default is the
+// plain text "404 page not found". It is installed with r.NotFound inside the
+// /api and /api/v1 Route closures only, so the SPA fallback and the /opds,
+// /auth and /bridge mounts keep their own behaviour.
+func NotFoundJSON(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// allowProbeMethods are the methods MethodNotAllowedJSON tests a path with.
+var allowProbeMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// MethodNotAllowedJSON returns the 405 handler for a chi router: the standard
+// JSON error shape plus the Allow header RFC 9110 requires. chi only fills in
+// Allow for its own default handler (the list is not passed to custom ones),
+// so the allowed methods are found by asking routes, the router the handler is
+// installed on, which of the usual methods match the path.
+func MethodNotAllowedJSON(routes chi.Routes) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePath != "" {
+			path = rctx.RoutePath // relative to the sub-router, as its tree expects
+		}
+		var allowed []string
+		for _, m := range allowProbeMethods {
+			if routes.Match(chi.NewRouteContext(), m, path) {
+				allowed = append(allowed, m)
+			}
+		}
+		if len(allowed) > 0 {
+			w.Header().Set("Allow", strings.Join(allowed, ", "))
+		}
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 // Free text credentials. httpsec.RedactSecrets only knows URL shaped secrets
