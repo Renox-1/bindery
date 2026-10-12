@@ -343,3 +343,65 @@ func TestTrimTerminal_Batches(t *testing.T) {
 		t.Fatalf("remaining backlog: removed %d err %v, want 15", n, err)
 	}
 }
+
+// TestTrimTerminal_AgeIsWhenTheRowFinished: the cutoff measures when a row
+// became imported or failed, not when it was added. A release grabbed a year
+// ago whose import finished yesterday, or whose failure was recorded yesterday
+// (a re-grab resets added_at, but a row can also sit queued for months), must
+// survive. It also reads stamps in the form SQLite's own defaults write
+// ("2006-01-02 15:04:05"), which older rows carry.
+func TestTrimTerminal_AgeIsWhenTheRowFinished(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	r := NewDownloadRepo(database)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	yearAgo := now.Add(-400 * 24 * time.Hour)
+	yesterday := now.Add(-24 * time.Hour)
+	cutoff := now.Add(-90 * 24 * time.Hour)
+
+	imp := retentionRow(t, r, "added-long-ago-imported-yesterday", models.StateImported, yearAgo, nil, nil)
+	if _, err := database.ExecContext(ctx, `UPDATE downloads SET imported_at=? WHERE id=?`, yesterday, imp); err != nil {
+		t.Fatal(err)
+	}
+	fail := retentionRow(t, r, "added-long-ago-failed-yesterday", models.StateFailed, yearAgo, nil, nil)
+	if _, err := database.ExecContext(ctx, `UPDATE downloads SET dead_at=? WHERE id=?`, yesterday, fail); err != nil {
+		t.Fatal(err)
+	}
+	legacy := retentionRow(t, r, "legacy-no-imported-at", models.StateImported, yearAgo, nil, nil)
+	if _, err := database.ExecContext(ctx, `UPDATE downloads SET imported_at=NULL, completed_at=? WHERE id=?`, yesterday, legacy); err != nil {
+		t.Fatal(err)
+	}
+	sqliteForm := "2006-01-02 15:04:05"
+	oldText := retentionRow(t, r, "text-stamp-old", models.StateImported, yearAgo, nil, nil)
+	if _, err := database.ExecContext(ctx, `UPDATE downloads SET added_at=?, imported_at=? WHERE id=?`,
+		yearAgo.Format(sqliteForm), yearAgo.Format(sqliteForm), oldText); err != nil {
+		t.Fatal(err)
+	}
+	newText := retentionRow(t, r, "text-stamp-new", models.StateImported, yearAgo, nil, nil)
+	if _, err := database.ExecContext(ctx, `UPDATE downloads SET added_at=?, imported_at=? WHERE id=?`,
+		yesterday.Format(sqliteForm), yesterday.Format(sqliteForm), newText); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := r.TrimTerminal(ctx, cutoff, 500, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := r.List(ctx)
+	have := map[string]bool{}
+	for _, d := range all {
+		have[d.GUID] = true
+	}
+	for _, kept := range []string{"added-long-ago-imported-yesterday", "added-long-ago-failed-yesterday", "legacy-no-imported-at", "text-stamp-new"} {
+		if !have[kept] {
+			t.Errorf("%s finished recently and must survive", kept)
+		}
+	}
+	if have["text-stamp-old"] || n != 1 {
+		t.Errorf("text-stamp-old should be the only row trimmed: removed %d, still present %v", n, have["text-stamp-old"])
+	}
+}

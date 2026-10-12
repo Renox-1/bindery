@@ -168,3 +168,43 @@ func TestListScope_WantedPaged_NonAdminIsolated(t *testing.T) {
 		t.Errorf("non-admin bob saw %v total %d, want his own and the unowned book only, total 2", got, body.Total)
 	}
 }
+
+// TestListWanted_PagesAreStableWhenTitlesTie: books that share a title and sort
+// key (two authors' "Collected Stories", a series of "Untitled") must land on
+// exactly one page each, in a fixed order. Without a unique tiebreak the order
+// of tied rows is whatever the sorter happens to produce for that LIMIT and
+// OFFSET, so a row can show on two pages and another on none.
+func TestListWanted_PagesAreStableWhenTitlesTie(t *testing.T) {
+	h, books, _, author, ctx := bookFixture(t)
+	const n = 60
+	for i := 0; i < n; i++ {
+		if err := books.Create(ctx, &models.Book{ForeignID: "T" + string(rune('A'+i/26)) + string(rune('a'+i%26)), AuthorID: author.ID,
+			Title: "Collected Stories", SortTitle: "Collected Stories", Status: models.BookStatusWanted,
+			Genres: []string{}, MetadataProvider: "openlibrary", Monitored: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, size := range []int{1, 7, 13} {
+		seen := map[int64]bool{}
+		var order []int64
+		for off := 0; ; off += size {
+			_, page := wantedGet(t, h, "?limit="+itoa(size)+"&offset="+itoa(off))
+			if len(page.Items) == 0 {
+				break
+			}
+			for _, b := range page.Items {
+				if seen[b.ID] {
+					t.Fatalf("limit %d: book %d came back on two pages", size, b.ID)
+				}
+				seen[b.ID] = true
+				order = append(order, b.ID)
+			}
+		}
+		if len(seen) != n {
+			t.Errorf("limit %d: pages covered %d of %d books", size, len(seen), n)
+		}
+		if !slices.IsSorted(order) {
+			t.Errorf("limit %d: tied books are not in id order: %v", size, order)
+		}
+	}
+}
