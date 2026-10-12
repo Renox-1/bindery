@@ -2,7 +2,7 @@
 -- Indexes for four lookups that EXPLAIN QUERY PLAN showed walking a whole
 -- table on a 200k history, 50k downloads library. IF NOT EXISTS on each so a
 -- rerun is safe.
--- NOTE: no semicolons inside comments -- the migration runner splits on them.
+-- NOTE: the migration runner splits on semicolons, so keep them out of comments.
 
 -- history filtered by event type, newest first. HistoryRepo.ListPaged and
 -- ListByEventType filter on event_type and sort created_at DESC, id DESC.
