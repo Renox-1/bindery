@@ -1264,7 +1264,7 @@ func (h *AuthorHandler) RelinkUpstream(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	default:
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeUpstreamError(w, err)
 		return
 	}
 
@@ -1336,7 +1336,7 @@ func (h *AuthorHandler) RelinkCandidates(w http.ResponseWriter, r *http.Request)
 	}
 	candidates, err := h.meta.SearchAuthorCandidates(r.Context(), term)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeUpstreamError(w, err)
 		return
 	}
 	if candidates == nil {
