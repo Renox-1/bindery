@@ -2,7 +2,7 @@
 
 This is the findings document for a three part review of Bindery: security, the shape and content of API error responses, and performance on a large library. Every finding was checked against a running binary or a failing test before anything was changed, then fixed in a narrow pull request. This page records what was found, what was fixed and where, what was refuted or turned out weaker than expected, and what was left alone on purpose.
 
-Status text in this page follows one rule: "fixed in #N" names the pull request that carries the fix. Two pull requests were still open when this page was written (#3185 and #3187). Everything they carry is marked "(open at the time of writing)" so the phrase is easy to find and update once they merge.
+Status text in this page follows one rule: "fixed in #N" names the pull request that carries the fix. All six fix pull requests are merged, #3185 and #3187 last, each after an independent review that added fixes. Where a review changed the outcome, the section says so.
 
 ## 1. Scope and method
 
@@ -66,17 +66,17 @@ Severity is this audit's own judgement of impact on a default install, not a CVS
 | E9 | Oversize bodies read as malformed (400, not 413) | Low | Fixed in #3176 for the swept handlers, rest tracked (section 4.5) |
 | E10 | CSRF refusal labelled `text/plain`; OPDS 429 and 503 plain text | Low | Fixed in #3176 |
 | E11 | Prowlarr test returned `ok` as a string | Low | Fixed in #3176 |
-| P1 | `bookCTE` built every file of a format for every book query | High on large libraries | Fixed in #3185 (open at the time of writing) |
-| P2 | One autocommit per log line on the single connection | Medium | Fixed in #3185 (open at the time of writing) |
-| P3 | Four lookups walked whole tables | Medium for history, negligible for the other three | Fixed in #3185 (open at the time of writing) |
-| P4 | The queue listed and sent the whole downloads table, which never shrank | High on aged installs | Fixed in #3187 (open at the time of writing) |
-| P5 | The wanted list was one unpaged array | Low (bytes only) | Fixed in #3187 (open at the time of writing) |
+| P1 | `bookCTE` built every file of a format for every book query | High on large libraries | Fixed in #3185 |
+| P2 | One autocommit per log line on the single connection | Medium | Fixed in #3185 |
+| P3 | Four lookups walked whole tables | Medium for history, negligible for the other three | Fixed in #3185 |
+| P4 | The queue listed and sent the whole downloads table, which never shrank | High on aged installs | Fixed in #3187 |
+| P5 | The wanted list was one unpaged array | Low (bytes only) | Fixed in #3187 |
 | P6 | Hashed build files had no cache lifetime | Low | Fixed in #3177 |
 | P7 | A large download was cut at the 120 second server write timeout | High for audiobooks | Fixed in #3177 |
 | P8 | Zips deflated audio that is already compressed | Medium | Fixed in #3177 |
-| P9 | SABnzbd and NZBGet pollers did one lookup per item; startup recovery read the whole table per row | Medium | Fixed in #3187 (open at the time of writing) |
+| P9 | SABnzbd and NZBGet pollers did one lookup per item; startup recovery read the whole table per row | Medium | Fixed in #3187 |
 | P10 | Metadata clients kept two idle connections per host | Low | Fixed in #3177 |
-| P11 | Cache eviction scanned every entry under the write lock | Low until the cache is large | Fixed in #3185 (open at the time of writing) |
+| P11 | Cache eviction scanned every entry under the write lock | Low until the cache is large | Fixed in #3185 |
 | Auth reads | Auth does several database reads per request | n/a | Tracked in #1468, not changed |
 | Metadata N+1 | Calibre author lookup and author add enrichment are N+1 per book | n/a | Tracked in #1469, not changed |
 | Link local opt in | Opt in for link local indexer addresses | n/a | Tracked in #2036, not changed |
@@ -257,7 +257,7 @@ Sites that matched the grep and were deliberately not changed: places that conti
 
 All numbers are from the seeded database in section 1 unless stated. The numbers quoted here were taken from the build notes and the pull request descriptions, with the same noise caveat.
 
-### 5.1 P1, the `bookCTE` query (#3185, open at the time of writing)
+### 5.1 P1, the `bookCTE` query (#3185)
 
 **Confirmed, but not as literally planned.** `EXPLAIN QUERY PLAN` shows no `SCAN book_files` line, because the format index is used. It does show both CTEs `MATERIALIZE`d over every row of their format and joined through an automatic index, which is a whole table build to return one row. For `GetByID` the plan before was `MATERIALIZE first_ebook`, `MATERIALIZE first_audiobook`, `SEARCH books USING INTEGER PRIMARY KEY`, `SCAN fe`, `SEARCH fa USING AUTOMATIC COVERING INDEX`. The list pages carry the same two `MATERIALIZE` lines. After the fix the plan is `SEARCH bf USING INDEX idx_book_files_format_book (format=? AND book_id=?)` twice and nothing else.
 
@@ -282,7 +282,9 @@ HTTP, 8 concurrent clients, medians of three interleaved runs with the spread in
 
 The two queue ranges overlap, and the queue cost is dominated by 50,000 download rows and 30 MB of JSON (P4), so no queue win is claimed for P1.
 
-### 5.2 P2, log write batching (#3185, open at the time of writing)
+**Review of #3185: equivalence and the worst case.** The rewrite changes SQL that feeds every book screen, so the review added a permanent differential test, `TestBookQueries_EquivalentToCTEShape` (`internal/db/books_equivalence_test.go`), which runs the old CTE shape and the new subquery shape side by side. Over 217 books by 38 columns (8,246 raw cells) and 15,945 result rows across 12,480 filtered pages, there were zero differences. Listing all 20,000 books went from 283 ms to 185 ms, and no query shape got slower. That includes the worst case for the new form, every stored path empty so every row runs the subqueries, which went from about 1,046 ms to 233 ms for list all.
+
+### 5.2 P2, log write batching (#3185)
 
 **Confirmed as a design change. The benefit is shown by a microbenchmark, not by HTTP load.** The log writer committed one autocommit per record on the single database connection. It now collects a batch (up to 100 records, or 250 ms after the first record), then writes it in one transaction with a prepared statement, without holding a connection while the batch fills. A full 512 slot channel still drops records rather than block the caller. A failed batch is retried row by row, and the first failure of a run is printed once on stderr (not through `slog`, which would feed back into the logger).
 
@@ -297,7 +299,7 @@ That is about 8x less connection time per record. The HTTP flood (2,000 debug li
 
 **Trade off, stated plainly.** A crash or power loss can lose up to 250 ms of the newest rows from the `logs` table. A normal shutdown flushes the batch in hand. stdout and the in memory ring buffer are unaffected.
 
-### 5.3 P3, migration 107 (#3185, open at the time of writing)
+### 5.3 P3, migration 107 (#3185)
 
 Four indexes in `107_perf_indexes.sql`. Forward only.
 
@@ -312,15 +314,17 @@ Four indexes in `107_perf_indexes.sql`. Forward only.
 
 **Startup cost.** Creating the indexes on the seeded database (200,000 history rows, 50,000 downloads) took 535, 488 and 704 ms from log gap preflight to database ready, about 0.5 s median, against 4, 15 and 4 ms for a start with nothing to apply. The one minute load average was about 7.
 
+**Review of #3185: startup cost, re-measured.** On a database of 20,000 books, 200,000 history rows and 50,000 downloads, migration 107 took about 0.43 s. The backfill that came in with #3158 added about 0.23 s on top, so about 0.66 s to database ready, against 4 ms for the baseline. Extrapolated, a history table of a million rows would cost roughly 2 to 3 s once, on the first start after the upgrade.
+
 **Weaker than the plan said (P3, partly).** Only the history index is a large win. The pending releases and authors tables are tiny (2,000 rows each), so their gain is negligible, and the downloads index is a small gain inside the noise. They were kept because the plan shows the scan or sort gone and they help any later `LIMIT` query.
 
-### 5.4 P4, the queue and download retention (#3187, open at the time of writing)
+### 5.4 P4, the queue and download retention (#3187)
 
 **Confirmed.** `enrichedQueueItems` listed the whole downloads table, 50,000 rows and 30.0 MB, and nothing ever deleted a row.
 
-*Fix, view:* `DownloadRepo.ListActive` lists everything except an `imported` row older than 7 days (age is `imported_at`, then `completed_at`, then `added_at`). Every state that waits for a person stays listed however old. The Sonarr style `/api/queue` already excluded imported rows and is unchanged.
+*Fix, view:* `DownloadRepo.ListActive` lists everything except an `imported` row older than 7 days (age is `imported_at`, then `completed_at`, then `added_at`). The queue hides only those imported rows. Every other state, including `failed`, stays listed however old. The Sonarr style `/api/queue` already excluded imported rows and is unchanged.
 
-*Fix, retention:* a scheduler job `download-trim` (every 6 hours, beside `log-trim`) deletes `imported` and `failed` rows older than `BINDERY_DOWNLOAD_RETENTION_DAYS` (default 90, `0` disables the job). It never deletes a live state, `importFailed` or `importBlocked`, and keeps a row while a surviving row names the same torrent or usenet job (the shared removal guard from #3051). Batches of 500 with a 250 ms pause, one short statement each. On the seeded database 30,859 rows were removed in 16.2 s wall clock (62 batches, almost all of it the pauses), a concurrent query on the single connection waited at most 62 ms on a loaded machine, and a second pass removed 0 rows in 5.5 ms. History rows, the blocklist and every book are untouched, and nothing references `downloads` by foreign key.
+*Fix, retention:* a scheduler job `download-trim` (every 6 hours, beside `log-trim`) deletes `imported` and `failed` rows older than `BINDERY_DOWNLOAD_RETENTION_DAYS` (default 90, `0` disables the job). Age is `COALESCE(imported_at, dead_at, completed_at, grabbed_at, added_at)`; the review added `TestTrimTerminal_AgeIsWhenTheRowFinished` because the builder's fixtures set every stamp to the same value and could not tell the fallbacks apart. The first pass runs about 6 hours after the upgraded process starts and removes every eligible row in one go, which on an install that has run for a year is most of the table. Setting `BINDERY_DOWNLOAD_RETENTION_DAYS=0` before the first start keeps the rows. The changelog and `docs/DEPLOYMENT.md` say so. It never deletes a live state, `importFailed` or `importBlocked`, and keeps a row while a surviving row names the same torrent or usenet job (the shared removal guard from #3051). Batches of 500 with a 250 ms pause, one short statement each. On the seeded database 30,859 rows were removed in 16.2 s wall clock (62 batches, almost all of it the pauses), a concurrent query on the single connection waited at most 62 ms on a loaded machine, and a second pass removed 0 rows in 5.5 ms. History rows, the blocklist and every book are untouched, and nothing references `downloads` by foreign key.
 
 | Measure | Before | After |
 |-|-|-|
@@ -331,11 +335,13 @@ Four indexes in `107_perf_indexes.sql`. Forward only.
 
 Read plainly: about 2.3x faster at p50 under load and 3.3x fewer bytes. It stays at 9.2 MB because the seed makes 30 percent of the rows `failed` or `importFailed` (all kept) and 10 percent active, far more than a real install has. Imported and failed rows are 82 percent of the seeded table. Only those older than 90 days were removed, which is 61.7 percent (30,859 of 50,000).
 
-**The trade off, stated plainly.** `downloads.guid` is unique, and an `imported` row whose book still exists is what makes a grab of that release answer "already imported". Once the row is trimmed, Bindery no longer remembers that exact release. If the book becomes wanted again (say its file was deleted) and that same release is picked, it can be grabbed again. Before this change that situation refused the release for ever, which was arguably a bug. Scheduler search only searches wanted books, so there is no upgrade loop. If the refusal should be kept, the alternative is to trim only failed rows and imports whose book is gone, which trims about 12 percent of the seeded table instead of 82 percent. `BINDERY_DOWNLOAD_RETENTION_DAYS=0` restores the old behaviour.
+**The trade off, stated plainly.** `downloads.guid` is unique, and an `imported` row whose book still exists is what makes a grab of that release answer "already imported". Once the row is trimmed, Bindery no longer remembers that exact release. If the book becomes wanted again (say its file was deleted) and that same release is picked, it can be grabbed again. Scheduler search only searches wanted books, so there is no upgrade loop. If the refusal should be kept, the alternative is to trim only failed rows and imports whose book is gone, which trims about 12 percent of the seeded table instead of 82 percent. `BINDERY_DOWNLOAD_RETENTION_DAYS=0` restores the old behaviour.
 
-### 5.5 P5, the wanted list (#3187, open at the time of writing)
+**Review of #3187.** The review found no data loss and no re-grab defect. Nothing references `downloads` by foreign key, and telemetry reads history, not downloads. The only consumers of guid uniqueness are the manual grab (409) and the scheduler auto grab. Before the change, a book whose row was old enough to trim and that became wanted again was stuck for ever, because auto grab returned at the best result without trying another release. After the change it re-grabs once, and the import stamps a fresh `imported_at`, so the new row is protected for another 90 days. There is no loop.
 
-**Confirmed for bytes, refuted for server time.** `GET /api/v1/wanted/missing` with no `limit` is unchanged (a bare array of every wanted book). With `limit` (capped at 500) it answers `{items,total,limit,offset}`, and the Wanted page now pages and searches on the server. The count query skips the `book_files` CTEs when there is no search.
+### 5.5 P5, the wanted list (#3187)
+
+**Confirmed for bytes, refuted for server time.** `GET /api/v1/wanted/missing` with no `limit` is unchanged (a bare array of every wanted book). With `limit` it answers `{items,total,limit,offset}` (a `limit` of 0, a negative value or a non numeric one falls back to 100, anything above 500 is capped at 500, and an `offset` past the end returns empty `items` with the real `total`), and the Wanted page now pages and searches on the server. The count query skips the `book_files` CTEs when there is no search.
 
 | Measure | Before | After |
 |-|-|-|
@@ -344,7 +350,7 @@ Read plainly: about 2.3x faster at p50 under load and 3.3x fewer bytes. It stays
 | p50, `?limit=50` (ms) | not available (the old binary ignores `limit`) | 1498, 1506, 1065 (median 1498) |
 | Single request probe | 0.13 to 0.17 s | 0.14 to 0.21 s for `?limit=50` |
 
-About 40x fewer bytes, but **server time per request did not improve**, because the page query still built the `book_files` CTEs (P1). No latency win is claimed for P5. These numbers were taken before P1; whether the paged form gets faster once #3185 merges has not been measured.
+About 40x fewer bytes, but **server time per request did not improve**, because the page query still built the `book_files` CTEs (P1). No latency win is claimed for P5. These numbers were taken before P1 landed; the paged form on a tree that has both #3185 and #3187 was not re-measured.
 
 ### 5.6 P6, immutable asset caching (#3177)
 
@@ -373,12 +379,12 @@ About 40x fewer bytes, but **server time per request did not improve**, because 
 
 `zipMethod` chooses by extension: store for mp3, m4b, m4a, aac, flac, ogg, opus, wma, epub, jpg, jpeg, png, gif, webp and zip; deflate for pdf, txt, cue, nfo and anything unknown. The machine was shared, but the gap is two orders of magnitude.
 
-### 5.9 P9, pollers (#3187, open at the time of writing)
+### 5.9 P9, pollers (#3187)
 
 **Confirmed.** The SABnzbd and NZBGet pollers did one `WHERE sabnzbd_nzo_id=?` select per history item. A counting database driver in the test shows 200 slots running 200 selects before and 1 (`ListByNzoIDs`) now. Two further sites turned up on the same path:
 
 - `blockStaleImportFailures` listed the whole downloads table at the end of every poll, per client. It now reads only the two states it acts on (`ListByStatuses(downloading, importFailed)`): one whole table read per poll before, 0 after.
-- Startup recovery of interrupted imports (`RecoverInterruptedImports`) listed the whole table once for each recovered row (`downloadByID`). With 25 wedged rows the counting test shows 25 whole table reads before and 0 after (now `GetByID`). The pull request description estimates the old cost at 0.4 s per row on 50,000 rows; that timing run was not repeated, so only the read counts are quoted here.
+- Startup recovery of interrupted imports (`RecoverInterruptedImports`) listed the whole table once for each recovered row (`downloadByID`). With 25 wedged rows the counting test shows 25 whole table reads before and 0 after (now `GetByID`). The review of #3187 also timed startup with 50 wedged rows on the seeded database: 20.0 s to a healthy API on the baseline, 0.3 s after the fix (0.2 s with none wedged).
 
 **Not changed.** The Transmission, qBittorrent, Deluge and rTorrent pollers still list the whole table once per client per 15 second tick, because they build the set of claimed torrent hashes from every row (finished ones too) to stop legacy reconciliation claiming a hash a finished row already owns. Narrowing that changes behaviour, and P4 retention shrinks the table instead. Follow up (section 7).
 
@@ -386,9 +392,9 @@ About 40x fewer bytes, but **server time per request did not improve**, because 
 
 **Confirmed.** Two bursts of 8 parallel requests, held until all were in flight: the default client dialled 14 connections, the metadata transport 8. `httpsec.MetadataTransport()` is a clone of `DefaultProxyTransport()` with `MaxIdleConnsPerHost` 16, used by the metadata provider packages. The review made the clone shared per base transport, because some clients (Hardcover) are built per request, and a clone per call would give each its own idle pool that was never reused. A new base (an outbound proxy being installed) gets a new clone. The clone adds no dial guard and removes none; the guarded transports are not touched.
 
-### 5.11 P11, TTL cache eviction (#3185, open at the time of writing)
+### 5.11 P11, TTL cache eviction (#3185)
 
-**Confirmed.** `evictEarliestLocked` ranged over every entry under the write lock on each overflowing set. It now inspects at most 32 entries (Go's map iteration starts at a random bucket) and evicts the earliest expiry among them. Caches of 32 entries or fewer are still exact. Eviction is now approximate for larger caches: the victim is the earliest expiring of a random sample, not the global earliest. The size cap, TTL expiry and the no self eviction rule are unchanged.
+**Confirmed.** `evictEarliestLocked` ranged over every entry under the write lock on each overflowing set. It now inspects at most 32 entries (Go's map iteration starts at a random bucket) and evicts the earliest expiry among them. Caches of 32 entries or fewer are still exact. Eviction is now approximate for larger caches: the victim is the earliest expiring of a random sample, not the global earliest. With a single TTL the old exact earliest expiry was effectively the oldest written entry (first in, first out), so the practical change is that a larger cache drops an old entry rather than the oldest one. The size cap, TTL expiry and the no self eviction rule are unchanged.
 
 `BenchmarkTTLCache_SetOverflow`, one overflowing set (the "before" is the same code with the sample forced to the whole map):
 
@@ -455,9 +461,9 @@ Each pull request ran, as its description records:
 
 **#3177 (P6, P7, P8, P10).** `TestSPAHandler_CacheControl` (14 paths, with and without a URL base); `TestHTTPMiddleware_ResponseControllerReachesServerWriter`; `TestStallDeadlineWriter_RollsTheDeadlineForward`, `..._UnsupportedWriterPassesThrough`, `TestFileDownload_ExtendsWriteDeadline`, `..._DeadlineUnsupportedStillServes`, `..._RangeRequestIsPartialContent`, `..._StalledClientIsDropped`, `..._SteadyClientOutlastsStallTimeout`, `TestBridgeFile_ExtendsWriteDeadline`, `TestDownloadOutlastsServerWriteTimeout`, `TestDownloadRangeThroughRealStack`; `TestStreamZip_StoresAlreadyCompressedFormats`; `TestIsBookDownloadPath`, `TestCompressUnlessDownload`; `TestMetadataTransport_ClonesBaseAndRaisesIdleConns`, `..._FollowsTheBaseWhenItChanges`, `..._KeepsProxyAndDialHook`, `..._DoesNotWeakenGuardedTransports`, `..._ReusesConnectionsAcrossBursts`.
 
-**#3185 (P1, P2, P3, P11), open at the time of writing.** `TestBookQueries_PlanBindsFileLookupToBook`; `TestMigrate107*` (indexes exist and are used, no temp b-tree on the history page or the downloads list, idempotent rerun); `TestLogHandler_*` (`BatchesIntoFewTransactions`, `PreservesOrder`, `StopFlushesPartialBatch`, `FlushesAfterMaxWait`, `DoesNotHoldConnectionWhileWaiting`, `FailedBatchIsSalvagedAndReportedOnce`); `TestTTLCache_EvictionInspectsBoundedSample`, `..._OverflowSetStaysAtCapAndKeepsWrite`, `..._SampledVictimIsAmongEarlierExpiring`.
+**#3185 (P1, P2, P3, P11).** `TestBookQueries_PlanBindsFileLookupToBook`, `TestBookQueries_FirstFilePerFormat`, `TestBookQueries_EquivalentToCTEShape`; `TestMigrate107PerfIndexesExistAndAreUsed` (indexes exist and are used, no temp b-tree on the history page or the downloads list), `TestMigrate107IsIdempotent`; `TestLogHandler_BatchesIntoFewTransactions`, `..._PreservesOrder`, `..._StopFlushesPartialBatch`, `..._FlushesAfterMaxWait`, `..._DoesNotHoldConnectionWhileWaiting`, `..._FailedBatchIsSalvagedAndReportedOnce`; `TestTTLCache_EvictionInspectsBoundedSample`, `..._OverflowSetStaysAtCapAndKeepsWrite`, `..._SampledVictimIsAmongEarlierExpiring`.
 
-**#3187 (P4, P5, P9), open at the time of writing.** `internal/db/downloads_retention_test.go` (`TestListActive_StateTable`, `..._FallsBackThroughStamps`, `TestTrimTerminal`, `..._KeepsRowsThatShareAJobWithSurvivors`, `..._Batches`), `internal/scheduler/download_trim_test.go` (`TestTrimFinishedDownloads_ZeroKeepsEverything`, `TestStart_DownloadTrimJob`), `internal/config/download_retention_test.go` (`TestLoad_DownloadRetentionDays`), `internal/api/queue_active_test.go` (`TestQueueList_ShowsEverythingButOldImports`), `internal/api/wanted_paging_test.go` (`TestListWanted_LimitReturnsTheEnvelope`, `..._PagedFlagsUnmonitoredAuthors`, `TestListScope_WantedPaged_NonAdminIsolated`), `internal/importer/scanner_poll_queries_test.go` with a recording `database/sql` driver (`TestCheckSABnzbdDownloads_OneLookupForTheWholePoll`, the NZBGet twin, `..._RepeatedSlotActsOnce`, `TestRecoverInterruptedImports_NoWholeTableListPerRow`), and web `WantedPage.test.tsx`, `listStateInUrl.test.tsx`, `nordicLocales.render.test.tsx`.
+**#3187 (P4, P5, P9).** `internal/db/downloads_retention_test.go` (`TestListActive_StateTable`, `..._FallsBackThroughStamps`, `TestTrimTerminal`, `..._KeepsRowsThatShareAJobWithSurvivors`, `..._Batches`, `..._AgeIsWhenTheRowFinished`), `internal/scheduler/download_trim_test.go` (`TestTrimFinishedDownloads_UsesTheRetentionWindow`, `..._ZeroKeepsEverything`, `TestStart_DownloadTrimJob`), `internal/config/download_retention_test.go` (`TestLoad_DownloadRetentionDays`), `internal/api/queue_active_test.go` (`TestQueueList_ShowsEverythingButOldImports`), `internal/api/wanted_paging_test.go` (`TestListWanted_NoLimitKeepsTheBareArray`, `..._LimitReturnsTheEnvelope`, `..._PagesAreStableWhenTitlesTie`, `..._PagedFlagsUnmonitoredAuthors`, `TestListScope_WantedPaged_NonAdminIsolated`), `internal/importer/scanner_poll_queries_test.go` with a recording `database/sql` driver (`TestCheckSABnzbdDownloads_OneLookupForTheWholePoll`, the NZBGet twin, `..._RepeatedSlotActsOnce`, `TestRecoverInterruptedImports_NoWholeTableListPerRow`), and web `WantedPage.test.tsx`, `listStateInUrl.test.tsx`, `nordicLocales.render.test.tsx`.
 
 ### 6.4 Mutation checks
 
@@ -469,7 +475,7 @@ A mutation check breaks one guard on a tree that still compiles and confirms a n
 | #3176 | 34: the sweep per file group and manual import, body handling (never 413, two `ReadAll` sites), eight recoverer mutations, four not found and 405 mutations, three auth, two Prowlarr | All 34 caught. Not mutation tested: the `main.go` wiring of `api.Recoverer` (no panic route in the smoke suite), and the four `books.go` reload sites |
 | #3175 | One per guard: S1 allow, S2 lexical fallback and unresolved root, S3 unguarded dial and guarded proxy dial, S4 no dial guard, no redirect validation, no `CheckRedirect`, S5 no limiter, S6 both views, S7 no `RequireAdmin` and unchecked proto and host, S8 bounds off and cap too loose, S9 both DSNs | All killed. One survived at first (SABnzbd without `CheckRedirect`, because the dial guard also refuses the redirect, which is defence in depth); the client tests were strengthened to require the hop refusal and it was then killed |
 | #3177 | No hash check, immutable never set or set on every static path, `Unwrap` returning nil, `Flush` removed, deadline call removed or set to an hour, zip always deflate, `.m4b` or `.epub` dropped from the store list, store as the default, compress skip bypassed or the OPDS prefix broken, idle limit back to 2, no clone, clone of `http.DefaultTransport` | All killed |
-| #3185 | Seven on the log writer (batch size 1, no flush on stop, no row retry, stderr report on every failure, reversed order, no timer exit, transaction held across the wait), the history index without `id DESC`, the sample size forced to the whole map | All caught. The held transaction mutation deadlocks the package and times out; `DoesNotHoldConnectionWhileWaiting` is the test that names it |
+| #3185 | Seven on the log writer (batch size 1, no flush on stop, no row retry, stderr report on every failure, reversed order, no timer exit, transaction held across the wait), the history index without `id DESC`, the sample size forced to the whole map. The review closed three guards that had survived the builder's tests: the production batch limit constant, a blocking send in the log handler's `Handle`, and the just inserted key guard in cache eviction | All caught after the review. The held transaction mutation deadlocks the package and times out; `DoesNotHoldConnectionWhileWaiting` is the test that names it |
 | #3187 | 19, including chunk size 1 for `ListByNzoIDs`, trim deleting `importBlocked`, the shared job guard off, the cutoff ignored, no batch limit, zero retention still trimming, the job registered at 0 days, config rejecting `0`, the queue window changed, and four on the paged wanted list | All 19 caught (table in the #3187 description) |
 
 ## 7. Follow ups to file
@@ -498,7 +504,7 @@ Listed here only. None has been filed as an issue yet.
 **Bundle size.** Built from `462609ff` with `npm ci` and `npm run build` (Vite 8.3.1, 327 modules). The build wrote 90 files under `assets/` (one entry chunk, route and settings tab chunks, lazy locale chunks, one CSS file, one PNG), 1,722,677 bytes of JavaScript in total and 1,895,895 bytes for all of `dist/`. The largest chunks:
 
 | Chunk | Size | Gzip |
-|-------|------|------|
+|-|-|-|
 | `index` (entry, loaded on every page) | 473.72 kB | 146.77 kB |
 | `sv` (Swedish locale, lazy) | 105.79 kB | 34.16 kB |
 | `nb` (Norwegian locale, lazy) | 103.42 kB | 33.95 kB |
