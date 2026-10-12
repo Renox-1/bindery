@@ -78,7 +78,7 @@ Severity is this audit's own judgement of impact on a default install, not a CVS
 | P10 | Metadata clients kept two idle connections per host | Low | Fixed in #3177 |
 | P11 | Cache eviction scanned every entry under the write lock | Low until the cache is large | Fixed in #3185 (open at the time of writing) |
 | Auth reads | Auth does several database reads per request | n/a | Tracked in #1468, not changed |
-| Metadata N+1 | Metadata lookups are N+1 | n/a | Tracked in #1469, not changed |
+| Metadata N+1 | Calibre author lookup and author add enrichment are N+1 per book | n/a | Tracked in #1469, not changed |
 | Link local opt in | Opt in for link local indexer addresses | n/a | Tracked in #2036, not changed |
 | Cross tenant existence | A cross tenant existence disclosure on a 409 | n/a | Tracked in a private security advisory |
 | Accepted risks | See section 3.2 | Low | Accepted, documented only |
@@ -172,7 +172,7 @@ These outbound clients do not use `GuardedTransport` or `DirectGuardedTransport`
 Cross referenced only, not touched by this audit:
 
 - #1468, authentication does several database reads per request.
-- #1469, metadata lookups are N+1.
+- #1469, the Calibre author lookup and author add enrichment are N+1 per book.
 - #2036, opt in for link local indexer addresses.
 - A cross tenant existence disclosure on a 409 response is tracked in a private security advisory.
 
@@ -414,7 +414,7 @@ Hold time no longer grows with the cache.
 
 ### 5.13 Tracked separately
 
-#1468 (authentication does several database reads per request) and #1469 (the metadata N+1) are not changed by this audit.
+#1468 (authentication does several database reads per request) and #1469 (the metadata N+1 on Calibre author lookup and author add enrichment) are not changed by this audit.
 
 ## 6. Verification
 
