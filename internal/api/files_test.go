@@ -821,8 +821,9 @@ func seedFileBook(t *testing.T, books *db.BookRepo, author *models.Author, forei
 
 // The server WriteTimeout is a deadline for the whole response, which a large
 // audiobook cannot meet on a slow link (it cut downloads off at 120 s). The
-// handler has to lift it for the file and zip responses, and only for them.
-func TestFileDownload_ClearsWriteDeadline(t *testing.T) {
+// handler has to replace it with a rolling one for the file and zip responses,
+// and only for them.
+func TestFileDownload_ExtendsWriteDeadline(t *testing.T) {
 	for _, kind := range []string{"file", "zip"} {
 		t.Run(kind, func(t *testing.T) {
 			h, books, author, ctx, tmp := fileFixture(t)
@@ -846,8 +847,8 @@ func TestFileDownload_ClearsWriteDeadline(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", w.Code)
 			}
-			if w.calls == 0 || !w.deadline.IsZero() {
-				t.Fatalf("write deadline calls=%d value=%v, want cleared to the zero time", w.calls, w.deadline)
+			if w.calls == 0 || !w.deadline.After(time.Now().Add(downloadStallTimeout-time.Minute)) {
+				t.Fatalf("write deadline calls=%d value=%v, want pushed out by the stall timeout", w.calls, w.deadline)
 			}
 		})
 	}
@@ -895,8 +896,8 @@ func TestFileDownload_RangeRequestIsPartialContent(t *testing.T) {
 	if cl := w.Header().Get("Content-Length"); cl != "4" {
 		t.Fatalf("Content-Length = %q, want 4", cl)
 	}
-	if !w.deadline.IsZero() || w.calls == 0 {
-		t.Fatalf("deadline not cleared on a ranged response (calls=%d)", w.calls)
+	if w.calls == 0 || !w.deadline.After(time.Now().Add(downloadStallTimeout-time.Minute)) {
+		t.Fatalf("deadline not extended on a ranged response (calls=%d)", w.calls)
 	}
 }
 

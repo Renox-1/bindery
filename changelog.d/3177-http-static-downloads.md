@@ -1,5 +1,5 @@
 ### Fixed
-- **Large audiobook downloads no longer stop at two minutes** (#3177). A book or audiobook download was cut off when it had been running for two minutes, however steadily the client was reading, which hit big files on a slow link. Downloads now run as long as the client needs, and resuming with a range request still works. The OPDS download and the Calibre bridge file transfer are covered too.
+- **Large audiobook downloads no longer stop at two minutes** (#3177). A book or audiobook download was cut off when it had been running for two minutes, however steadily the client was reading, which hit big files on a slow link. Downloads now run as long as the client keeps reading (one that stops for five minutes is dropped), and resuming with a range request still works. The OPDS download and the Calibre bridge file transfer are covered too.
 
 ### Changed
 - **The web app's files are cached for a year** (#3177). Build files under `/assets/` carry a content hash in their name, so the browser and any proxy in front of Bindery can keep them without asking again. The app shell, favicon and manifest are still checked every time, so an upgrade reaches you straight away.

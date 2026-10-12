@@ -204,9 +204,8 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 	defer sp.Close()
 
 	name := filepath.Base(filepath.Clean(filePath))
-	allowSlowTransfer(w)
 	if sp.info.IsDir() {
-		streamZip(w, sp.root, sp.rel, name)
+		streamZip(withStallDeadline(w), sp.root, sp.rel, name)
 		return
 	}
 
@@ -216,21 +215,62 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 	}
 	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Disposition", contentDisposition(name))
-	http.ServeContent(w, r, name, info.ModTime(), f)
+	http.ServeContent(withStallDeadline(w), r, name, info.ModTime(), f)
 }
 
-// allowSlowTransfer lifts the server's write deadline for a response whose
-// size the server does not control. http.Server.WriteTimeout bounds the whole
-// response, so a multi gigabyte audiobook on a slow link was cut off at that
-// limit (120 s) however steadily the client was reading. Called only after the
-// path checks, so an error response still runs under the normal deadline. A
-// writer that cannot move its deadline (a wrapper that hides the server's
-// writer, a test recorder) keeps the server's setting.
-func allowSlowTransfer(w http.ResponseWriter) {
-	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
-		slog.Debug("file download: could not clear the write deadline", "error", err)
+// downloadStallTimeout is how long a file download may sit without the client
+// taking any data before the connection is dropped. It is a variable so a test
+// can shorten it.
+var downloadStallTimeout = 5 * time.Minute
+
+// withStallDeadline replaces the server's whole response write deadline with a
+// rolling one for a response whose size the server does not control.
+// http.Server.WriteTimeout bounds the entire response, so a multi gigabyte
+// audiobook on a slow link was cut off at that limit (120 s) however steadily
+// the client was reading. Here every write pushes the deadline to now plus
+// downloadStallTimeout instead: a client that keeps reading is never cut off,
+// and one that stops reading is dropped after that long rather than holding the
+// connection and a goroutine forever.
+//
+// Call it only after the path checks, so an error response still runs under
+// the normal deadline. A writer that cannot move its deadline (a wrapper that
+// hides the server's writer, a test recorder) is returned as it is and keeps
+// the server's setting.
+func withStallDeadline(w http.ResponseWriter) http.ResponseWriter {
+	rc := http.NewResponseController(w)
+	now := time.Now()
+	if err := rc.SetWriteDeadline(now.Add(downloadStallTimeout)); err != nil {
+		if !errors.Is(err, http.ErrNotSupported) {
+			slog.Debug("file download: could not extend the write deadline", "error", err)
+		}
+		return w
 	}
+	return &stallDeadlineWriter{ResponseWriter: w, rc: rc, last: now}
 }
+
+// stallDeadlineWriter extends the write deadline as the response is written.
+type stallDeadlineWriter struct {
+	http.ResponseWriter
+	rc   *http.ResponseController
+	last time.Time
+}
+
+func (s *stallDeadlineWriter) Write(b []byte) (int, error) {
+	// Moving the deadline is cheap, but not worth doing for every 32 KiB copy
+	// buffer: once a second (less for a very short timeout) keeps it close
+	// to exact.
+	if now := time.Now(); now.Sub(s.last) >= min(time.Second, downloadStallTimeout/10) {
+		s.last = now
+		_ = s.rc.SetWriteDeadline(now.Add(downloadStallTimeout))
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.NewResponseController keep reaching the server's writer.
+func (s *stallDeadlineWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Flush keeps a plain http.Flusher assertion working.
+func (s *stallDeadlineWriter) Flush() { _ = s.rc.Flush() }
 
 // zipMethod picks how a file is stored in a streamed zip. Audio, ebooks and
 // images are compressed already, and deflating them spends CPU for a few
