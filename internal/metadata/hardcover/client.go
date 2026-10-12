@@ -92,7 +92,7 @@ func NormalizeAPIToken(value string) string {
 // New creates a new Hardcover client.
 func New() *Client {
 	return &Client{
-		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.MetadataTransport()},
 		throttle: defaultThrottle,
 	}
 }
@@ -118,7 +118,7 @@ func NewAuthenticated(token string) *Client {
 		// the Hardcover list syncer and import-list browse (the callers of
 		// NewAuthenticated) dial hardcover.app directly while every other
 		// Hardcover call is proxied (#proxy-bypass).
-		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:     &http.Client{Timeout: 15 * time.Second, Transport: httpsec.MetadataTransport()},
 		token:    token,
 		throttle: defaultThrottle,
 	}

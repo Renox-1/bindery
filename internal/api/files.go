@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -203,6 +204,7 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 	defer sp.Close()
 
 	name := filepath.Base(filepath.Clean(filePath))
+	allowSlowTransfer(w)
 	if sp.info.IsDir() {
 		streamZip(w, sp.root, sp.rel, name)
 		return
@@ -215,6 +217,32 @@ func (h *FileHandler) serveFile(w http.ResponseWriter, r *http.Request, filePath
 	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Disposition", contentDisposition(name))
 	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+// allowSlowTransfer lifts the server's write deadline for a response whose
+// size the server does not control. http.Server.WriteTimeout bounds the whole
+// response, so a multi gigabyte audiobook on a slow link was cut off at that
+// limit (120 s) however steadily the client was reading. Called only after the
+// path checks, so an error response still runs under the normal deadline. A
+// writer that cannot move its deadline (a wrapper that hides the server's
+// writer, a test recorder) keeps the server's setting.
+func allowSlowTransfer(w http.ResponseWriter) {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		slog.Debug("file download: could not clear the write deadline", "error", err)
+	}
+}
+
+// zipMethod picks how a file is stored in a streamed zip. Audio, ebooks and
+// images are compressed already, and deflating them spends CPU for a few
+// percent while a large audiobook is read through twice. Text, cue sheets and
+// PDF (not reliably compressed inside) keep Deflate, as does anything unknown.
+func zipMethod(name string) uint16 {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp3", ".m4b", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
+		".epub", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip":
+		return zip.Store
+	}
+	return zip.Deflate
 }
 
 // writeServeError answers a request whose openServable or openFile failed and
@@ -549,7 +577,7 @@ func streamZip(w http.ResponseWriter, root *os.Root, dir, name string) {
 		if base != "." {
 			rel = strings.TrimPrefix(p, base+"/")
 		}
-		zf, zerr := zw.Create(rel)
+		zf, zerr := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zipMethod(rel)})
 		if zerr != nil {
 			return zerr
 		}

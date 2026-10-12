@@ -217,6 +217,12 @@ The frontend is embedded in the binary via `go:embed` — no separate static-fil
 
 Deleting a book or an author with its files removes only files inside a root folder, `BINDERY_LIBRARY_DIR` or `BINDERY_AUDIOBOOK_DIR`, after resolving symlinks on both sides. A root that is itself a symlink to another volume works, but a symlink inside a root that points outside it is not followed. A path outside every root is skipped with a warning in the log (`path containment: refusing to delete file`) and the database row is still removed. With no root at all every file delete is refused until one is set; a default install cannot reach that state, because `BINDERY_LIBRARY_DIR` defaults to `/books`. A Calibre library that lives outside your roots is not covered by deletes from Bindery, as before.
 
+## Caching and large downloads behind a reverse proxy
+
+The web app's build files under `/assets/` carry a content hash in their name, and Bindery serves them with `Cache-Control: public, max-age=31536000, immutable`. A proxy or CDN in front of Bindery may cache them for as long as it likes, because a new release changes the names. Nothing else is cached this way: `index.html` is `no-store`, and files such as the favicon and the manifest are revalidated. If your proxy rewrites `Cache-Control` on `/assets/`, leave the long lifetime alone.
+
+Book downloads (`/api/v1/book/{id}/file` and the OPDS equivalent) are not bound by Bindery's 120 second response limit, so a large audiobook can take as long as the client needs. They honour `Range` requests, so a client can resume. An audiobook folder comes down as a zip that stores the audio, ebook and image files uncompressed, since they are compressed already. If a proxy sits in front, make sure its own read and send timeouts (`proxy_read_timeout` and `proxy_send_timeout` in nginx) are long enough for a slow link, and consider turning proxy response buffering off for that path.
+
 ## Running as a specific UID/GID
 
 Bindery ships on a [distroless/static-debian13:nonroot](https://github.com/GoogleContainerTools/distroless) base. The image has no shell, no `gosu`, and no entrypoint hook — it cannot switch user at runtime the way LinuxServer.io images do. If you need the container to own files as your media-library user (e.g. `1000:1000`), launch it with that UID/GID directly.

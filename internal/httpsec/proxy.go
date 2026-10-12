@@ -307,3 +307,30 @@ func RedirectGuard(policy Policy) func(*http.Request, []*http.Request) error {
 		return nil
 	}
 }
+
+// metadataIdleConnsPerHost is how many idle connections a metadata provider
+// transport keeps per host. net/http keeps 2, so a burst of 8 parallel lookups
+// to one provider (an author refresh fanning out) closes six connections when
+// it ends and pays the TCP and TLS handshakes again on the next burst.
+const metadataIdleConnsPerHost = 16
+
+// MetadataTransport returns the RoundTripper for a metadata provider client
+// (Open Library, Hardcover, Google Books and the like). It is a clone of
+// DefaultProxyTransport, so the configured outbound proxy, its bypass rules and
+// every other field of the base carry over, with a larger idle pool per host.
+// Each call returns its own clone: a provider owns its pool, and the shared
+// http.DefaultTransport that DefaultProxyTransport may return is never mutated.
+//
+// These providers are fixed public endpoints and were never dial guarded, so
+// the clone adds no guard and removes none; a DialContext on the base survives
+// the clone. Callers that need a policy use GuardedTransport.
+func MetadataTransport() http.RoundTripper {
+	base := DefaultProxyTransport()
+	t, ok := base.(*http.Transport)
+	if !ok {
+		return base
+	}
+	c := t.Clone()
+	c.MaxIdleConnsPerHost = metadataIdleConnsPerHost
+	return c
+}

@@ -65,7 +65,7 @@ type Client struct {
 func New() *Client {
 	return &Client{
 		baseURL: defaultBaseURL,
-		http:    &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:    &http.Client{Timeout: 15 * time.Second, Transport: httpsec.MetadataTransport()},
 		gate:    providerhttp.NewGate(),
 	}
 }

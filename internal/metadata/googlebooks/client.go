@@ -35,7 +35,7 @@ type Client struct {
 // New creates a Google Books client. apiKey can be empty for basic access.
 func New(apiKey string) *Client {
 	return &Client{
-		http:   &http.Client{Timeout: 10 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:   &http.Client{Timeout: 10 * time.Second, Transport: httpsec.MetadataTransport()},
 		apiKey: apiKey,
 		gate:   providerhttp.NewGate(),
 	}

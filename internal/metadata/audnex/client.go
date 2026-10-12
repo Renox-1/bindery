@@ -37,7 +37,7 @@ func New(region string) *Client {
 	}
 	return &Client{
 		baseURL: defaultBaseURL,
-		http:    &http.Client{Timeout: 15 * time.Second, Transport: httpsec.DefaultProxyTransport()},
+		http:    &http.Client{Timeout: 15 * time.Second, Transport: httpsec.MetadataTransport()},
 		region:  region,
 		gate:    providerhttp.NewGate(),
 	}

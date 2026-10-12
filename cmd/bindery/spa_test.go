@@ -151,3 +151,63 @@ func TestSPAHandler_ExistingAssetIsServed(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want a JavaScript type", ct)
 	}
 }
+
+const (
+	immutableCache = "public, max-age=31536000, immutable"
+	noStoreCache   = "no-cache, no-store, must-revalidate"
+)
+
+// Vite names every file under assets/ name-<hash>.ext, so the URL changes
+// whenever the content does and the browser may keep it for good. Anything
+// else, including files at the root and an unhashed file that happens to sit
+// under assets/, must stay revalidated or an upgrade would not reach users.
+func TestSPAHandler_CacheControl(t *testing.T) {
+	dist := fstest.MapFS{
+		"index.html":                  {Data: []byte(`<!doctype html>`)},
+		"assets/index-BAKpjB06.js":    {Data: []byte("export default 1\n")},
+		"assets/index-Cx9_-Qz1.css":   {Data: []byte("a{}\n")},
+		"assets/nb-BHWsVc0a.js":       {Data: []byte("export default {}\n")},
+		"assets/sub/page-BAKpjB06.js": {Data: []byte("x\n")},
+		"assets/logo.png":             {Data: []byte("\x89PNG\r\n\x1a\n")},
+		"assets/notes.js":             {Data: []byte("x\n")},
+		"favicon.png":                 {Data: []byte("\x89PNG\r\n\x1a\n")},
+		"manifest.webmanifest":        {Data: []byte(testManifest)},
+		"theme-bootstrap.js":          {Data: []byte("x\n")},
+		"decoy-BAKpjB06.js":           {Data: []byte("x\n")},
+	}
+	h := spaHandler(dist, []byte("<html></html>"))
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/assets/index-BAKpjB06.js", immutableCache},
+		{"/assets/index-Cx9_-Qz1.css", immutableCache},
+		{"/assets/nb-BHWsVc0a.js", immutableCache},
+		{"/assets/sub/page-BAKpjB06.js", immutableCache},
+		{"/assets/logo.png", ""},
+		{"/assets/notes.js", ""},
+		{"/favicon.png", ""},
+		{"/manifest.webmanifest", ""},
+		{"/theme-bootstrap.js", ""},
+		{"/decoy-BAKpjB06.js", ""},
+		{"/", noStoreCache},
+		{"/index.html", noStoreCache},
+		{"/books", noStoreCache},
+		{"/assets/gone-BAKpjB06.js", noStoreCache},
+	}
+	for _, base := range []string{"", "/bindery"} {
+		var handler http.Handler = h
+		if base != "" {
+			handler = http.StripPrefix(base, h)
+		}
+		for _, tc := range cases {
+			t.Run("base="+base+tc.path, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, base+tc.path, nil))
+				if got := rec.Header().Get("Cache-Control"); got != tc.want {
+					t.Fatalf("Cache-Control = %q, want %q (status %d)", got, tc.want, rec.Code)
+				}
+			})
+		}
+	}
+}

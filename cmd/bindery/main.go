@@ -894,7 +894,7 @@ func main() {
 	// against on-network spoofing.
 	r.Use(trustedProxyMiddleware())
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Compress(5))
+	r.Use(compressUnlessDownload(5))
 	r.Use(api.SecurityHeaders(cfg.FrameAncestors))
 	// Cap JSON / form request bodies at 1 MiB by default so an authenticated
 	// client cannot pin the process by streaming a multi-gigabyte body into
