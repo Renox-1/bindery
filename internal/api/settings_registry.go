@@ -151,10 +151,9 @@ var settingDescriptors = []SettingDescriptor{
 	},
 	{
 		Key: SettingMetadataPrimaryProvider, Type: SettingTypeEnum, Default: "openlibrary",
-		Values:          MetadataPrimaryProviders,
-		Description:     "Provider that decides what an author catalogue looks like. The others stay wired as enrichers. Selecting hardcover requires a stored Hardcover API token.",
-		RestartRequired: true,
-		State:           SettingStateActive,
+		Values:      MetadataPrimaryProviders,
+		Description: "Provider that decides what an author catalogue looks like. The others stay wired as enrichers. Selecting hardcover requires a stored Hardcover API token. A change applies to the next metadata lookup, without a restart.",
+		State:       SettingStateActive,
 	},
 	{
 		Key: "search.preferredLanguage", Type: SettingTypeString, Default: "",
@@ -509,15 +508,13 @@ var settingDescriptors = []SettingDescriptor{
 	// Google Books.
 	{
 		Key: SettingGoogleBooksAPIKey, Type: SettingTypeString, Default: "",
-		Description:     "Google Books API key, used to enrich metadata. The enricher is wired at startup, so a newly added key does nothing until Bindery restarts.",
-		RestartRequired: true,
-		State:           SettingStateActive,
+		Description: "Google Books API key, used to enrich metadata. Saving a key adds the Google Books enricher straight away, without a restart; with no key Google Books is not asked at all.",
+		State:       SettingStateActive,
 	},
 	{
 		Key: LegacySettingGoogleBooksAPIKey, Type: SettingTypeString, Default: "",
-		Description:     "Original spelling of googlebooks.apiKey, still read as a fallback for installs that stored the key under it.",
-		RestartRequired: true,
-		State:           SettingStateActive,
+		Description: "Original spelling of googlebooks.apiKey, still read as a fallback for installs that stored the key under it.",
+		State:       SettingStateActive,
 	},
 
 	// Auth. Every key here is classified secret, so the generic settings API

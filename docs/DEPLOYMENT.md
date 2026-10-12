@@ -739,7 +739,11 @@ Hardcover lookup of `dune` share an entry. Numeric-looking slugs, case-distinct
 slugs, and different providers remain distinct; Hardcover still tries the slug
 before its numeric-ID fallback. Live Hardcover token changes select a different
 cache namespace, and a fetch uses one token across all pages. Old namespaces
-expire under the same bounds. Direct provider calls remain uncached for callers
+expire under the same bounds. Changing the primary metadata provider or the
+Google Books key in Settings takes effect on the next lookup, with no restart
+(#1771); results that depend on more than one provider (ISBN lookups, author
+catalogues, enrichment, series search) are cached per provider set, so a
+switch never serves an answer the previous primary built. Direct provider calls remain uncached for callers
 that explicitly fetch fresh metadata, and a manual author **Refresh Metadata**
 still skips the cached author profile and catalogue (see
 `POST /api/v1/author/{id}/refresh` in [API.md](API.md)); its nested edition,

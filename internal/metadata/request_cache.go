@@ -57,7 +57,7 @@ type boundCacheProvidersKey struct{}
 
 // bindCacheProviders pins configuration for composed reads: every nested fetch
 // and derived cache key uses the same provider snapshots, even across workers.
-func (a *Aggregator) bindCacheProviders(ctx context.Context) (context.Context, string) {
+func (a *aggregatorCore) bindCacheProviders(ctx context.Context) (context.Context, string) {
 	bound := make(map[string]boundCacheProvider)
 	var scope strings.Builder
 	for _, p := range a.providers() {
@@ -121,12 +121,12 @@ func SchedulingDeadline(ctx context.Context) (time.Time, bool) {
 // value and cancellation; the upstream request is canceled when nobody needs it.
 // op names the operation for logs; key, which holds the query and provider
 // scope, is never logged.
-func cachedRequest[T any](ctx context.Context, a *Aggregator, cache *ttlCache, op, key string, fetch func(context.Context) (T, error), clone func(T) T) (T, error) {
+func cachedRequest[T any](ctx context.Context, a *aggregatorCore, cache *ttlCache, op, key string, fetch func(context.Context) (T, error), clone func(T) T) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
-	r := &a.requests
+	r := a.requests
 	if cache == nil {
 		cache = r.shortCache()
 	}
@@ -214,25 +214,25 @@ func recoverFetch[T any](ctx context.Context, op string, fetch func(context.Cont
 	return fetch(ctx)
 }
 
-func (a *Aggregator) searchProviderBooks(ctx context.Context, p Provider, query string) ([]models.Book, error) {
+func (a *aggregatorCore) searchProviderBooks(ctx context.Context, p Provider, query string) ([]models.Book, error) {
 	p, scope := resolveCacheProvider(ctx, p)
 	return a.searchBoundProviderBooks(ctx, p, scope, query)
 }
 
-func (a *Aggregator) searchBoundProviderBooks(ctx context.Context, p Provider, scope, query string) ([]models.Book, error) {
+func (a *aggregatorCore) searchBoundProviderBooks(ctx context.Context, p Provider, scope, query string) ([]models.Book, error) {
 	return cachedRequest(ctx, a, nil, "search-books", "search-books:"+scope+":"+query, func(ctx context.Context) ([]models.Book, error) {
 		return p.SearchBooks(ctx, query)
 	}, cloneBooks)
 }
 
-func (a *Aggregator) searchProviderAuthors(ctx context.Context, p Provider, query string) ([]models.Author, error) {
+func (a *aggregatorCore) searchProviderAuthors(ctx context.Context, p Provider, query string) ([]models.Author, error) {
 	p, scope := resolveCacheProvider(ctx, p)
 	return cachedRequest(ctx, a, nil, "search-authors", "search-authors:"+scope+":"+query, func(ctx context.Context) ([]models.Author, error) {
 		return p.SearchAuthors(ctx, query)
 	}, cloneAuthors)
 }
 
-func (a *Aggregator) providerEditions(ctx context.Context, p Provider, id string) ([]models.Edition, error) {
+func (a *aggregatorCore) providerEditions(ctx context.Context, p Provider, id string) ([]models.Edition, error) {
 	p, scope := resolveCacheProvider(ctx, p)
 	// Match Hardcover's exact slug-first interpretation. In particular, do not
 	// parse numbers, lowercase slugs, or map a slug to a numeric book ID.

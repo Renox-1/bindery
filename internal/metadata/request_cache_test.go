@@ -247,11 +247,11 @@ func TestEditionCacheCanonicalRoutesAndIsolation(t *testing.T) {
 
 // Synctest must not own the production janitor, which intentionally outlives
 // requests and only stops when its cache is collected.
-func newRequestTestAggregator(p Provider) *Aggregator {
+func newRequestTestAggregator(p Provider) *aggregatorCore {
 	cache := func(ttl time.Duration) *ttlCache {
 		return &ttlCache{ttl: ttl, state: &ttlState{items: make(map[string]cacheItem), maxEntries: 1000}}
 	}
-	return &Aggregator{primary: p, cache: cache(24 * time.Hour), requests: requestCache{searches: cache(5 * time.Minute)}}
+	return &aggregatorCore{primary: p, cache: cache(24 * time.Hour), requests: &requestCache{searches: cache(5 * time.Minute)}}
 }
 
 func (p *cacheTestProvider) GetAuthor(ctx context.Context, id string) (*models.Author, error) {

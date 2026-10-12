@@ -1246,6 +1246,19 @@ unset key:
 `hardcover`. `nb` and `bnf` are queried only while selected: an instance that
 never selects them never contacts either library.
 
+A `PUT` (or `DELETE`) of `metadata.primary_provider`, `googlebooks.apiKey`,
+`google_books_api_key` or `hardcover.api_token` rebuilds the metadata providers
+before it answers, so the next lookup already uses the new set, with no restart
+(#1771). The `PUT` response for those keys carries an extra boolean:
+
+```json
+{"key": "metadata.primary_provider", "value": "bnf", "updatedAt": "...", "appliedLive": true}
+```
+
+`appliedLive: false` means the value was stored but the providers could not be
+rebuilt; the previous providers stay in use and the new value applies at the
+next restart. Every other key answers without the field.
+
 Requests authenticated with the API key are treated as admin, so a script or a
 third party client using the key still reads every non secret setting. A client
 signed in as a `user` account that read other keys should switch to the API

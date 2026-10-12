@@ -38,7 +38,6 @@ import (
 	"github.com/vavallee/bindery/internal/logbuf"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/metadata/dnb"
-	"github.com/vavallee/bindery/internal/metadata/googlebooks"
 	"github.com/vavallee/bindery/internal/metadata/hardcover"
 	"github.com/vavallee/bindery/internal/metadata/openlibrary"
 	"github.com/vavallee/bindery/internal/metrics"
@@ -301,56 +300,15 @@ func main() {
 		return api.GetHardcoverAPIToken(ctx, settingsRepo)
 	})
 
-	// Determine primary provider from settings (default: openlibrary). The
-	// primary decides what an author's catalogue looks like; every other
-	// provider is added as an enricher so metadata is still cross-checked.
-	//
-	// - "dnb" is the recommended choice for German/Austrian/Swiss catalogues,
-	//   where OpenLibrary coverage is too thin for German-language books.
-	// - "nb" is the same for Norwegian ones: original titles where
-	//   OpenLibrary has the English translation.
-	// - "bnf" is the same for French editions, translations included: the
-	//   French title an indexer names a release after (#3144).
-	// - "hardcover" trades breadth for a cleaner, editorially curated
-	//   catalogue: no translation editions masquerading as separate works, no
-	//   omnibus bundles, no non-book merchandise rows (#2040).
-	configuredPrimary := ""
-	if s, _ := settingsRepo.Get(ctxBoot, api.SettingMetadataPrimaryProvider); s != nil {
-		configuredPrimary = s.Value
-	}
-	primaryName := resolveMetadataPrimaryProvider(configuredPrimary, api.GetHardcoverAPIToken(ctxBoot, settingsRepo) != "")
-	primaryProvider := primaryMetadataProvider(primaryName, olClient, dnbClient, hcClient)
-	slog.Info("metadata primary provider", "provider", primaryName)
-
-	var enrichers []metadata.Provider
-	if apiKey := googleBooksAPIKey(ctxBoot, settingsRepo); apiKey != "" {
-		enrichers = append(enrichers, googlebooks.New(apiKey))
-		slog.Info("google books enrichment enabled")
-	}
-	// Every provider that isn't primary becomes an enricher.
-	if primaryName != "hardcover" {
-		// The enricher is registered whether or not a token is set: the token
-		// is read live per request through WithTokenSource, so configuring one
-		// later takes effect without a restart. Only the log line is
-		// conditional, so it no longer claims enrichment is running when every
-		// call will short-circuit as unconfigured (#2075).
-		enrichers = append(enrichers, hcClient)
-		if api.GetHardcoverAPIToken(ctxBoot, settingsRepo) != "" {
-			slog.Info("hardcover enrichment enabled")
-		} else {
-			slog.Info("hardcover enrichment idle: no api token configured")
-		}
-	}
-	if primaryName != "openlibrary" {
-		enrichers = append(enrichers, olClient)
-		slog.Info("openlibrary enrichment enabled")
-	}
-	if primaryName != "dnb" {
-		enrichers = append(enrichers, dnbClient)
-		slog.Info("dnb enrichment enabled")
-	}
-
-	metaAgg := metadata.NewAggregator(primaryProvider, enrichers...)
+	// The primary provider and the enrichers come from settings
+	// (metadata.primary_provider, the Google Books key, the Hardcover token).
+	// metaProviders builds them here and again whenever one of those settings
+	// is saved, so a change applies to the next lookup without a restart
+	// (#1771); see SettingsHandler.WithChangeHook below.
+	metaProviders := newMetadataProviders(settingsRepo, olClient, dnbClient, hcClient)
+	bootProviders := metaProviders.build(ctxBoot)
+	bootProviders.log("metadata providers configured")
+	metaAgg := metadata.NewAggregator(bootProviders.primary, bootProviders.enrichers...)
 
 	// Optional CLI subcommand: `bindery migrate {csv,readarr} <path>`.
 	// Runs the import and exits; does not start the HTTP server. Useful
@@ -786,7 +744,8 @@ func main() {
 	blocklistHandler := api.NewBlocklistHandler(blocklistRepo)
 	notificationHandler := api.NewNotificationHandler(notificationRepo, notif)
 	qualityProfileHandler := api.NewQualityProfileHandler(qualityProfileRepo)
-	settingsHandler := api.NewSettingsHandler(settingsRepo).WithDailyQuota(dailyQuota)
+	settingsHandler := api.NewSettingsHandler(settingsRepo).WithDailyQuota(dailyQuota).
+		WithChangeHook(metadataProvidersReconfigurer(metaProviders, metaAgg))
 	seriesHandler := api.NewSeriesHandler(seriesRepo, bookRepo, authorRepo, metaAgg, sched).
 		WithHardcoverFeatureSettings(settingsRepo, cfg.EnhancedHardcoverAPI).
 		WithFinder(importScanner).

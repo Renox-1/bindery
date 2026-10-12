@@ -278,12 +278,45 @@ const (
 type SettingsHandler struct {
 	settings   *db.SettingsRepo
 	dailyQuota *hardcover.DailyQuota
+	onChange   SettingsChangeHook
 }
+
+// SettingsChangeHook runs after a setting has been stored (PUT) or removed
+// (DELETE), so a component that read the setting at boot can pick the new
+// value up without a restart. handled reports whether the hook acts on key at
+// all; err reports that it does but could not apply the change. The write has
+// already succeeded either way and is never rolled back: the hook's error
+// only reaches the log and the response's appliedLive flag.
+type SettingsChangeHook func(ctx context.Context, key string) (handled bool, err error)
 
 // WithDailyQuota shares the same pause with the API test button.
 func (h *SettingsHandler) WithDailyQuota(q *hardcover.DailyQuota) *SettingsHandler {
 	h.dailyQuota = q
 	return h
+}
+
+// WithChangeHook installs the hook every successful write runs. cmd/bindery
+// uses it to rebuild the metadata providers when the primary provider, the
+// Google Books key or the Hardcover token changes (#1771). Without one,
+// writes behave as before and the response carries no appliedLive flag.
+func (h *SettingsHandler) WithChangeHook(hook SettingsChangeHook) *SettingsHandler {
+	h.onChange = hook
+	return h
+}
+
+// runChangeHook runs the hook for key and returns the appliedLive value for
+// the response: nil when nothing acts on key, otherwise whether the change
+// took effect immediately.
+func (h *SettingsHandler) runChangeHook(ctx context.Context, key string) *bool {
+	if h.onChange == nil {
+		return nil
+	}
+	handled, err := h.onChange(ctx, key)
+	if !handled {
+		return nil
+	}
+	applied := err == nil
+	return &applied
 }
 
 func NewSettingsHandler(settings *db.SettingsRepo) *SettingsHandler {
@@ -554,11 +587,16 @@ func (h *SettingsHandler) Set(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	appliedLive := h.runChangeHook(r.Context(), key)
 	if isSecretSetting(key) {
-		writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": ""})
+		resp := map[string]any{"key": key, "value": ""}
+		if appliedLive != nil {
+			resp["appliedLive"] = *appliedLive
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	resp := settingSetResponse{Setting: &models.Setting{Key: key, Value: value}}
+	resp := settingSetResponse{Setting: &models.Setting{Key: key, Value: value}, AppliedLive: appliedLive}
 	if s, err := h.settings.Get(r.Context(), key); err == nil && s != nil {
 		resp.Setting = s
 	}
@@ -572,6 +610,11 @@ type settingSetResponse struct {
 	*models.Setting
 	Warning     string `json:"warning,omitempty"`
 	WarningCode string `json:"warningCode,omitempty"`
+	// AppliedLive is present only for a setting something applies at
+	// runtime (today the metadata provider settings, #1771): true when the
+	// change is already in effect, false when it saved but takes effect at
+	// the next restart.
+	AppliedLive *bool `json:"appliedLive,omitempty"`
 }
 
 // warningCalibredbMissing is the warning code for a calibredb write mode
@@ -1047,5 +1090,9 @@ func (h *SettingsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, err)
 		return
 	}
+	// Deleting metadata.primary_provider puts the default back in force, so
+	// the providers are rebuilt here too. 204 has no body to report it in;
+	// the hook logs a failure.
+	h.runChangeHook(r.Context(), key)
 	w.WriteHeader(http.StatusNoContent)
 }

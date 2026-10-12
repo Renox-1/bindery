@@ -121,7 +121,7 @@ func TestGetBookByISBN_IncompleteEnrichmentIsShortCached(t *testing.T) {
 	})
 }
 
-func canonicalASINTestAggregator(primary Provider) (*Aggregator, *stubAudnexClient) {
+func canonicalASINTestAggregator(primary Provider) (*aggregatorCore, *stubAudnexClient) {
 	audnexClient := &stubAudnexClient{books: map[string]*audnex.Book{
 		"B0D3R3MTLM": {
 			ASIN:     "B0D3R3MTLM",
