@@ -33,12 +33,32 @@ func TestMetadataTransport_ClonesBaseAndRaisesIdleConns(t *testing.T) {
 	if dt.MaxIdleConnsPerHost != defaultIdle {
 		t.Fatalf("default transport MaxIdleConnsPerHost changed %d -> %d", defaultIdle, dt.MaxIdleConnsPerHost)
 	}
-	if got == MetadataTransport() {
-		t.Fatal("two calls returned the same transport; each provider should own its pool")
+	if got != MetadataTransport() {
+		t.Fatal("two calls returned different transports; a provider built per request would get its own idle pool")
 	}
 	if got.IdleConnTimeout != dt.IdleConnTimeout || got.TLSHandshakeTimeout != dt.TLSHandshakeTimeout ||
 		got.MaxIdleConns != dt.MaxIdleConns || got.ForceAttemptHTTP2 != dt.ForceAttemptHTTP2 || got.Proxy == nil {
 		t.Fatalf("clone dropped base fields: %+v", got)
+	}
+}
+
+// Installing a proxy after the first call must not leave callers on a clone of
+// the old, proxy-less base.
+func TestMetadataTransport_FollowsTheBaseWhenItChanges(t *testing.T) {
+	resetProxy(t)
+	before := MetadataTransport().(*http.Transport)
+	if _, err := ConfigureOutboundProxy("http://proxy.example:3128", "", true); err != nil {
+		t.Fatal(err)
+	}
+	after := MetadataTransport().(*http.Transport)
+	if after == before {
+		t.Fatal("MetadataTransport kept the clone of the previous base")
+	}
+	if u, err := after.Proxy(httptest.NewRequest(http.MethodGet, "http://example.org/", nil)); err != nil || u == nil {
+		t.Fatalf("new clone has no proxy: %v %v", u, err)
+	}
+	if again := MetadataTransport(); again != http.RoundTripper(after) {
+		t.Fatal("repeat call did not reuse the clone")
 	}
 }
 

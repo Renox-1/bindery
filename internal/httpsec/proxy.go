@@ -318,8 +318,13 @@ const metadataIdleConnsPerHost = 16
 // (Open Library, Hardcover, Google Books and the like). It is a clone of
 // DefaultProxyTransport, so the configured outbound proxy, its bypass rules and
 // every other field of the base carry over, with a larger idle pool per host.
-// Each call returns its own clone: a provider owns its pool, and the shared
-// http.DefaultTransport that DefaultProxyTransport may return is never mutated.
+// The clone is shared by every caller, as http.DefaultTransport was: some
+// providers are built per request (the Hardcover settings test, the list
+// syncer's client factory), and a clone per call would give each of those its
+// own idle pool, never reused and held open until the idle timeout. The
+// shared http.DefaultTransport that DefaultProxyTransport may return is never
+// mutated. If the base changes (ConfigureOutboundProxy installs a proxy), the
+// next call clones the new base.
 //
 // These providers are fixed public endpoints and were never dial guarded, so
 // the clone adds no guard and removes none; a DialContext on the base survives
@@ -330,7 +335,19 @@ func MetadataTransport() http.RoundTripper {
 	if !ok {
 		return base
 	}
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+	if metadataBase == base && metadataClone != nil {
+		return metadataClone
+	}
 	c := t.Clone()
 	c.MaxIdleConnsPerHost = metadataIdleConnsPerHost
+	metadataBase, metadataClone = base, c
 	return c
 }
+
+var (
+	metadataMu    sync.Mutex
+	metadataBase  http.RoundTripper
+	metadataClone *http.Transport
+)
