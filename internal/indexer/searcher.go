@@ -180,7 +180,9 @@ func (s *Searcher) makeClient(baseURL, apiKey string) *newznab.Client {
 //
 // Indexers with non-standard taxonomies (category IDs > 9999, e.g. MaM's
 // 100xxx subcategories) are passed through as-is when no standard-range
-// match exists. Substituting a standard fallback ID (3030, 7020) on such
+// match exists. So are the Newznab "Other" IDs (8xxx): an indexer whose list
+// has nothing in the requested media's thousand but does name 8000 is searched
+// under 8000 rather than under a standard ID it never listed. Substituting a standard fallback ID (3030, 7020) on such
 // indexers returns unrelated results because the standard IDs do not cover
 // the indexer's extended subcategory tree.
 //
@@ -232,6 +234,7 @@ func filterCategoriesForMedia(cats []int, mediaType string, includeParentCategor
 		return fallback
 	}
 	var out []int
+	var other []int
 	hasNonStandard := false
 	// carriesMedia records whether the indexer lists anything at all in the
 	// requested media's thousand — the parent itself counts. It gates the
@@ -247,11 +250,24 @@ func filterCategoriesForMedia(cats []int, mediaType string, includeParentCategor
 		if c > 9999 {
 			hasNonStandard = true
 		}
+		// Newznab files "Other" under 8xxx, and trackers that do not map their
+		// books file them there. A user who typed 8000 into an indexer's
+		// categories chose it, so it is not ours to replace with 7020 (#3169).
+		if c/1000 == 8 {
+			other = append(other, c)
+		}
 	}
 	if len(out) == 0 {
 		if hasNonStandard {
 			// Non-standard taxonomy: pass through untouched, opt-in included.
 			return cats
+		}
+		if len(other) > 0 {
+			// Nothing in the requested media's thousand, but the indexer
+			// lists the Other bucket: search that, not a standard ID the
+			// indexer was never given. The opt-in parent does not apply, since
+			// the indexer does not carry the media's thousand.
+			return other
 		}
 		out = append([]int(nil), fallback...)
 	}

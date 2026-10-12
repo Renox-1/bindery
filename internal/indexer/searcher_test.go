@@ -430,6 +430,36 @@ func TestFilterCategoriesForMedia(t *testing.T) {
 	}
 }
 
+// TestFilterCategoriesForMedia_OtherBucket pins #3169: a category the user
+// typed in the Newznab Other bucket (8xxx) is searched as given, instead of
+// being replaced by the standard 7020 or 3030 fallback.
+func TestFilterCategoriesForMedia_OtherBucket(t *testing.T) {
+	cases := []struct {
+		name      string
+		cats      []int
+		mediaType string
+		parent    bool
+		want      []int
+	}{
+		{"only 8000, ebook", []int{8000}, "ebook", false, []int{8000}},
+		{"only 8000, audiobook", []int{8000}, "audiobook", false, []int{8000}},
+		{"8000 and 8010", []int{8000, 8010}, "ebook", false, []int{8000, 8010}},
+		{"media match wins over 8000", []int{8000, 7020}, "ebook", false, []int{7020}},
+		{"8000 beside the wrong media only", []int{8000, 7020}, "audiobook", false, []int{8000}},
+		{"parent opt-in does not add 7000 to an Other only indexer", []int{8000}, "ebook", true, []int{8000}},
+		{"other standard buckets still fall back", []int{5000}, "ebook", false, []int{7020}},
+		{"non-standard taxonomy still passes through", []int{100001, 8000}, "ebook", false, []int{100001, 8000}},
+		{"empty still falls back", nil, "audiobook", false, []int{3030}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := filterCategoriesForMedia(tc.cats, tc.mediaType, tc.parent); !equalIntSlice(got, tc.want) {
+				t.Errorf("filterCategoriesForMedia(%v, %q, %v) = %v, want %v", tc.cats, tc.mediaType, tc.parent, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestScoreResultMediaTypePenalty(t *testing.T) {
 	audiobookResult := newznab.SearchResult{Title: "Dune.Herbert.m4b", GUID: "a"}
 	ebookResult := newznab.SearchResult{Title: "Dune.Herbert.epub", GUID: "e"}
