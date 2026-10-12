@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { api, Book, SearchResult } from '../api/client'
@@ -7,9 +7,8 @@ import { grabWithForceConfirm } from '../util/forceGrab'
 import BulkActionBar from '../components/BulkActionBar'
 import ImportHints from '../components/ImportHints'
 import Pagination from '../components/Pagination'
-import { usePagination } from '../components/usePagination'
+import { useServerPagination } from '../components/usePagination'
 import { useListParams, useUrlSearchInput } from '../components/useListParams'
-import { foldedIncludes } from '../util/foldForSearch'
 import { usePolling } from '../components/usePolling'
 import { safeHref } from '../util/safeHref'
 import { formatBytes } from '../util/format'
@@ -37,7 +36,9 @@ export default function WantedPage() {
   const { t } = useTranslation()
   const { confirm, confirmDialog } = useConfirmDialog()
 
+  // The current page of wanted books, and how many match the search in all.
   const [books, setBooks] = useState<Book[]>([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [searchingId, setSearchingId] = useState<number | null>(null)
   const [results, setResults] = useState<SearchResult[]>([])
@@ -46,8 +47,9 @@ export default function WantedPage() {
   // book lands on the same page of the same list (#3052).
   const list = useListParams(LIST_DEFAULTS)
   const updateList = list.update
-  // The list filters on every keystroke; the URL catches up once typing
-  // pauses, replacing the entry rather than pushing one per keystroke.
+  // The box follows every keystroke; the URL, and with it the server query,
+  // catches up once typing pauses, replacing the entry rather than pushing one
+  // per keystroke.
   const commitSearch = useCallback((q: string) => updateList({ q, page: null }, { replace: true }), [updateList])
   const [search, setSearch] = useUrlSearchInput(list.values.q, commitSearch)
   const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null)
@@ -60,29 +62,54 @@ export default function WantedPage() {
   const [toast, setToast] = useState<string | null>(null)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const load = () => {
-    api.listWanted({ includeExcluded: showExcluded }).then(setBooks).catch(console.error).finally(() => setLoading(false))
-  }
-
-  // Guard against stale responses and set-state-after-unmount: a `cancelled`
-  // flag captured in the effect is checked before every setState and flipped in
-  // cleanup, so a request that resolves after a newer refetch or after unmount
-  // is ignored. Mirrors AuthorsPage's poll guard.
-  useEffect(() => {
-    let cancelled = false
-    api.listWanted({ includeExcluded: showExcluded })
-      .then(b => { if (!cancelled) setBooks(b) })
-      .catch(console.error)
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [showExcluded])
-
-  // Set-state-after-unmount guard for the poll, which outlives any one effect.
+  // Set-state-after-unmount guard for the fetches and the poll, which outlive
+  // any one effect.
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
+
+  // The query a total belongs to, minus the page. The snap back to the last
+  // page may only use a total fetched for the query on screen (see BooksPage).
+  const searchQuery = list.values.q
+  const queryKey = JSON.stringify([searchQuery, showExcluded])
+  const [totalKey, setTotalKey] = useState<string | null>(null)
+  const { page, pageSize, paginationProps } = useServerPagination(total, 50, 'wanted', {
+    page: list.page,
+    setPage: list.setPage,
+    ready: totalKey === queryKey,
+  })
+
+  // The server pages and searches (limit, offset, search), so a library with
+  // thousands of wanted books is not serialised on every 5 second poll. Each
+  // request takes a number and only the newest may set state: a response that
+  // lands after a page change, a newer poll or an unmount is dropped.
+  const loadRequestRef = useRef(0)
+  const fetchPage = useCallback(() => {
+    const request = ++loadRequestRef.current
+    return api.listWantedPage({
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      search: searchQuery || undefined,
+      includeExcluded: showExcluded,
+    }).then(({ items, total }) => {
+      if (request !== loadRequestRef.current || !mounted.current) return
+      setBooks(items)
+      setTotal(total)
+      setTotalKey(queryKey)
+    })
+  }, [page, pageSize, searchQuery, showExcluded, queryKey])
+
+  const load = () => {
+    fetchPage().catch(console.error).finally(() => { if (mounted.current) setLoading(false) })
+  }
+
+  useEffect(() => {
+    fetchPage()
+      .catch(console.error)
+      .finally(() => { if (mounted.current) setLoading(false) })
+  }, [fetchPage])
 
   // Poll the wanted list so background auto-grabs (and books leaving as they
   // import) show up without a manual reload (#1161). Mirrors QueuePage's 5s
@@ -95,7 +122,7 @@ export default function WantedPage() {
   // (#2360). It also pauses entirely while the tab is hidden.
   usePolling(() => {
     if (showResults !== null || grabbingGuid !== null || searchingId !== null) return
-    api.listWanted({ includeExcluded: showExcluded }).then(b => { if (mounted.current) setBooks(b) }).catch(() => {})
+    fetchPage().catch(() => {})
   }, 5000)
 
   useEffect(() => {
@@ -105,17 +132,6 @@ export default function WantedPage() {
   }, [toast])
 
   const showToast = useCallback((msg: string) => { setToast(msg) }, [])
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return books
-    // Folded on both sides, so this filter agrees with the server's search
-    // instead of being the stricter of the two. toLowerCase() alone folds case
-    // but not accents, so "cafe" never matched "Café" here (#1660).
-    return books.filter(b =>
-      foldedIncludes(b.title, search) ||
-      foldedIncludes(b.author?.authorName, search)
-    )
-  }, [books, search])
 
   const searchBook = async (book: Book) => {
     setSearchingId(book.id)
@@ -142,11 +158,14 @@ export default function WantedPage() {
   const unmonitor = async (book: Book) => {
     setUnmonitoringId(book.id)
     const prev = books
+    const prevTotal = total
     setBooks(books.filter(b => b.id !== book.id))
+    setTotal(Math.max(0, total - 1))
     try {
       await api.updateBook(book.id, { monitored: false })
     } catch {
       setBooks(prev)
+      setTotal(prevTotal)
       showToast("Couldn't update wanted list — reverted.")
     } finally {
       setUnmonitoringId(null)
@@ -172,7 +191,7 @@ export default function WantedPage() {
       setTimeout(() => {
         setShowResults(null)
         setGrabbedGuid(null)
-        api.listWanted().then(setBooks).catch(console.error)
+        load()
       }, 1200)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Grab failed')
@@ -181,13 +200,11 @@ export default function WantedPage() {
     }
   }
 
-  const { pageItems, paginationProps } = usePagination(filtered, 50, 'wanted', { page: list.page, setPage: list.setPage })
-
-  // This page's loaded ids, in order — handed to BookDetailPage as router
-  // state (#2548) for Previous/Next; see BookNavState there. Scoped to
-  // pageItems (this page's client-side-paginated slice), not the full
-  // filtered list — matches the "only as far as what's currently loaded"
-  // rule used by BooksPage/AuthorDetailPage.
+  // This page's loaded ids, in order, handed to BookDetailPage as router
+  // state (#2548) for Previous/Next; see BookNavState there. Scoped to this
+  // page, the slice the server returned, which matches the "only as far as
+  // what's currently loaded" rule used by BooksPage/AuthorDetailPage.
+  const pageItems = books
   const pageItemIds = pageItems.map(b => b.id)
 
   // A selection only means something on the page it was made on.
@@ -253,7 +270,7 @@ export default function WantedPage() {
       <div className="flex items-center gap-3 mb-3">
         <h2 className="text-xl font-semibold text-slate-800 dark:text-zinc-200">{t('wanted.title')}</h2>
         <span className="text-xs text-slate-500 dark:text-zinc-500">
-          {t('wanted.countLabel', { filtered: filtered.length, total: books.length })}
+          {t('books.countLabel', { count: total, defaultValue: '{{count}} books' })}
         </span>
         <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400 cursor-pointer select-none">
           <input
@@ -277,12 +294,12 @@ export default function WantedPage() {
 
       {loading ? (
         <div className="text-slate-600 dark:text-zinc-500">{t('common.loading')}</div>
-      ) : books.length === 0 ? (
+      ) : total === 0 && !searchQuery ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>{t('wanted.empty')}</p>
           <ImportHints />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : total === 0 ? (
         <div className="text-center py-16 text-slate-600 dark:text-zinc-500">
           <p>{t('wanted.noMatch')}</p>
         </div>

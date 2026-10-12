@@ -378,7 +378,10 @@ GET    /api/v1/search/author?term=…               metadata author search
 GET    /api/v1/search/book?term=…                 metadata book search
 GET    /api/v1/search/library?q=…                 your own catalogue: `{authors, books, series}`, up to `limit` rows per group (default 5, max 10), owner scoped like the list endpoints; 400 on an empty `q`
 GET    /api/v1/book/lookup?isbn=… | ?asin=…       single-book lookup by identifier
-GET    /api/v1/wanted/missing                     list wanted-but-missing books
+GET    /api/v1/wanted/missing                     list wanted-but-missing books. A bare array, every one of them, unless `limit` is passed:
+                                                  `?limit=50&offset=0&search=&includeExcluded=` answers {"items":[..],"total":N,"limit":50,"offset":0}.
+                                                  `total` counts every wanted book you can see that matches `search` and `includeExcluded`,
+                                                  whatever the page. `limit` is capped at 500; `search` and `offset` apply only with `limit`
 POST   /api/v1/wanted/bulk                        bulk operations on wanted
 ```
 
@@ -602,7 +605,9 @@ POST   /api/v1/downloadclient/{id}/test           probe connectivity (admin)
 POST   /api/v1/downloadclient/{id}/diagnose       path doctor: ordered checks with a fix each (admin)
 POST   /api/v1/downloadclient/test                probe an unsaved config (admin)
 
-GET    /api/v1/queue                              active downloads with live downloader overlay
+GET    /api/v1/queue                              downloads with live downloader overlay: every download except an `imported` one that finished more than 7 days ago.
+                                                  failed, importFailed and importBlocked stay listed however old, since they wait for Retry,
+                                                  Retry import, Match to book or Remove. Older imports are on the History page
        -> {"items":[..],"partial":true,"staleClients":[{"clientId":1,"name":"qBit","message":".."}]}
                                                   partial means a download client did not answer in time, so items is short
 POST   /api/v1/queue/grab                         submit a search result to the download client

@@ -47,6 +47,12 @@ type Config struct {
 	OIDCGroupClaim string // BINDERY_OIDC_GROUP_CLAIM (default "groups")
 	// Log retention in days (BINDERY_LOG_RETENTION_DAYS, default 14).
 	LogRetentionDays int
+	// DownloadRetentionDays is how long a finished (imported or failed)
+	// download row is kept before the scheduler trims it
+	// (BINDERY_DOWNLOAD_RETENTION_DAYS, default 90). 0 disables trimming and
+	// keeps every row, which is how Bindery behaved before the setting existed.
+	// History is never trimmed by this.
+	DownloadRetentionDays int
 	// Login rate limit (per-IP sliding window).
 	// BINDERY_RATE_LIMIT_MAX_FAILURES  (default: 5)
 	// BINDERY_RATE_LIMIT_WINDOW_MINUTES (default: 15)
@@ -119,6 +125,7 @@ func Load() *Config {
 		OIDCAdminGroup:           strings.TrimSpace(envOr("BINDERY_OIDC_ADMIN_GROUP", "")),
 		OIDCGroupClaim:           envOr("BINDERY_OIDC_GROUP_CLAIM", "groups"),
 		LogRetentionDays:         envInt("BINDERY_LOG_RETENTION_DAYS", 14),
+		DownloadRetentionDays:    envIntAllowZero("BINDERY_DOWNLOAD_RETENTION_DAYS", 90),
 		RateLimitMaxFailures:     envInt("BINDERY_RATE_LIMIT_MAX_FAILURES", 5),
 		RateLimitWindowMinutes:   envInt("BINDERY_RATE_LIMIT_WINDOW_MINUTES", 15),
 		URLBase:                  normalizeURLBase(envOr("BINDERY_URL_BASE", "")),
@@ -220,6 +227,17 @@ func envOr(key, fallback string) string {
 func envInt(key string, fallback int) int {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+// envIntAllowZero is envInt for a setting where 0 is a real value (here, "off")
+// rather than "unset". A negative or unparseable value falls back.
+func envIntAllowZero(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
 	}

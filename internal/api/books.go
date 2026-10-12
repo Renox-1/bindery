@@ -1168,6 +1168,19 @@ func sweepMatchesFormat(name, format string) bool {
 	}
 }
 
+// ListWanted answers GET /wanted/missing.
+//
+// With no `limit` it returns the bare array of every wanted book, the shape
+// Arr-compatible clients read, unchanged. With `limit` it returns the
+// {items, total, limit, offset} envelope the Books list uses, one page at a
+// time, which is what the Wanted page asks for so a library with thousands of
+// wanted books is not serialised on every 5 second poll.
+//
+// `search` and `offset` apply to the paged form only. `total` counts every
+// wanted book the caller can see that matches the filters (scope,
+// includeExcluded, search), ignoring limit and offset, so a page count can be
+// drawn from it. The paged form is ordered like the bare one (sort title)
+// until a search is typed, which ranks by relevance as the Books list does.
 func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	// Scope to the caller's own + unowned books under tenancy (0 = unscoped for
 	// admins / API-key / single-tenant), matching the main book list. Without
@@ -1175,9 +1188,14 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	// tenancy: the scoped ListByStatusAndUser existed and was used by OPDS, but
 	// this handler still called the unscoped variant).
 	scope := auth.ListScopeUserID(r.Context())
+	includeExcluded := r.URL.Query().Get("includeExcluded") == "true"
+	if strings.TrimSpace(r.URL.Query().Get("limit")) != "" {
+		h.listWantedPage(w, r, scope, includeExcluded)
+		return
+	}
 	var books []models.Book
 	var err error
-	if r.URL.Query().Get("includeExcluded") == "true" {
+	if includeExcluded {
 		books, err = h.books.ListByStatusIncludingExcludedAndUser(r.Context(), models.BookStatusWanted, scope)
 	} else {
 		books, err = h.books.ListByStatusAndUser(r.Context(), models.BookStatusWanted, scope)
@@ -1197,6 +1215,30 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	}
 	h.markUnmonitoredAuthors(r.Context(), books)
 	writeJSON(w, http.StatusOK, books)
+}
+
+// listWantedPage is the paged form of ListWanted.
+func (h *BookHandler) listWantedPage(w http.ResponseWriter, r *http.Request, scope int64, includeExcluded bool) {
+	limit, offset := parseLimitOffset(r, bookListDefaultLimit, bookListMaxLimit)
+	books, total, err := h.books.ListPageFiltered(r.Context(), db.BookListFilter{
+		UserID:          scope,
+		Search:          strings.TrimSpace(r.URL.Query().Get("search")),
+		Status:          models.BookStatusWanted,
+		IncludeExcluded: includeExcluded,
+	}, limit, offset)
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if books == nil {
+		books = []models.Book{}
+	}
+	for i := range books {
+		cleanBookDescription(&books[i])
+		proxyBookImages(&books[i])
+	}
+	h.markUnmonitoredAuthors(r.Context(), books)
+	writeJSON(w, http.StatusOK, bookListResponse{Items: books, Total: total, Limit: limit, Offset: offset})
 }
 
 // markUnmonitoredAuthors flags the rows whose author is not monitored, so the

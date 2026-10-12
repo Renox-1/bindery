@@ -256,6 +256,10 @@ type BookListFilter struct {
 	// bound is set.
 	ReleaseFrom   string
 	ReleaseBefore string
+	// IncludeExcluded lists books flagged excluded as well. The default
+	// (false) drops them, which is what every list but the Wanted page's
+	// "show excluded" toggle wants.
+	IncludeExcluded bool
 }
 
 // bookSearchRank returns the ORDER BY prefix that ranks a search result set,
@@ -334,7 +338,11 @@ func (r *BookRepo) ListPageFiltered(ctx context.Context, f BookListFilter, limit
 		offset = 0
 	}
 
-	where, args := QueryScopeForIncludingNull("books.owner_user_id", "WHERE excluded = 0", f.UserID)
+	base := "WHERE excluded = 0"
+	if f.IncludeExcluded {
+		base = "WHERE 1 = 1"
+	}
+	where, args := QueryScopeForIncludingNull("books.owner_user_id", base, f.UserID)
 	searchOrder, rankArgs := "", []any(nil)
 	if folded := textutil.FoldForSearch(f.Search); folded != "" {
 		// A query that folds to nothing (all punctuation, or an emoji) leaves
@@ -402,7 +410,15 @@ func (r *BookRepo) ListPageFiltered(ctx context.Context, f BookListFilter, limit
 		args = append(args, rb)
 	}
 
-	total, err := r.count(ctx, bookCTE+" SELECT COUNT(*) FROM books "+bookJoins+" "+where, args)
+	// The count needs the author join only for a search (it matches the author's
+	// search key); every other predicate reads books alone. Without a search it
+	// skips the joins and the two book_files CTEs, which otherwise build over the
+	// whole table to count rows they never read.
+	countSQL := "SELECT COUNT(*) FROM books " + where
+	if searchOrder != "" {
+		countSQL = bookCTE + " SELECT COUNT(*) FROM books " + bookJoins + " " + where
+	}
+	total, err := r.count(ctx, countSQL, args)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -54,6 +54,81 @@ func (r *DownloadRepo) ListByUser(ctx context.Context, userID int64) ([]models.D
 	return r.query(ctx, q, args...)
 }
 
+// activeWhere selects the rows the queue view shows: every row except an
+// imported one that finished before the bound time. Its two arguments are the
+// imported state and that time. See ListActive.
+const activeWhere = "WHERE (status <> ? OR COALESCE(imported_at, completed_at, added_at) >= ?)"
+
+// ListActive returns the downloads the queue view shows, newest first: every
+// row EXCEPT an imported one that finished before importedSince.
+//
+// Imported is the only state hidden, and only once it is old. It is the one
+// state with nothing left to do: the book is in the library, there is no Retry
+// or Match, and the history page already records the grab and the import. Every
+// other state stays however old it is, because each is either live work
+// (grabbed, downloading, completed, importPending, importing, importExternal,
+// importHeld) or waiting for a person (importFailed, importBlocked and failed,
+// which carry Retry, Retry import, Match to book and Remove). Hiding any of
+// those by age would hide an action the user has not taken yet.
+//
+// The age of an imported row is imported_at, falling back to completed_at and
+// then added_at for a row written before imported_at was stamped.
+//
+// It exists so the queue endpoint, which the UI polls every 5 seconds, does not
+// load and serialise the whole table on every request. The table gains a row
+// per grab and nothing removed old ones before TrimTerminal.
+func (r *DownloadRepo) ListActive(ctx context.Context, importedSince time.Time) ([]models.Download, error) {
+	return r.query(ctx, "SELECT "+downloadSelectColumns+" FROM downloads "+activeWhere+" ORDER BY added_at DESC",
+		models.StateImported, importedSince.UTC())
+}
+
+// ListActiveByUser is ListActive scoped to one owner with the strict equality
+// ListByUser uses.
+func (r *DownloadRepo) ListActiveByUser(ctx context.Context, userID int64, importedSince time.Time) ([]models.Download, error) {
+	where, args := QueryScope(activeWhere, userID, models.StateImported, importedSince.UTC())
+	return r.query(ctx, "SELECT "+downloadSelectColumns+" FROM downloads "+where+" ORDER BY added_at DESC", args...)
+}
+
+// ListByNzoIDs returns the downloads whose sabnzbd_nzo_id is one of ids, keyed
+// by that id, in one query per 500 ids. It is GetByNzoID for a whole poll's
+// worth of queue items at once, so a poller does not run one query per item.
+//
+// When two rows name the same id the lowest download id wins, which is the row
+// GetByNzoID returns (the index walks in rowid order within one key). Blank ids
+// match nothing, and ids that no row names are simply absent from the map.
+func (r *DownloadRepo) ListByNzoIDs(ctx context.Context, ids []string) (map[string]models.Download, error) {
+	out := make(map[string]models.Download, len(ids))
+	const chunk = 500
+	for start := 0; start < len(ids); start += chunk {
+		end := min(start+chunk, len(ids))
+		args := make([]any, 0, end-start)
+		for _, id := range ids[start:end] {
+			if id != "" {
+				args = append(args, id)
+			}
+		}
+		if len(args) == 0 {
+			continue
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+		rows, err := r.query(ctx,
+			"SELECT "+downloadSelectColumns+" FROM downloads WHERE sabnzbd_nzo_id IN ("+placeholders+") ORDER BY id ASC",
+			args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range rows {
+			if d.SABnzbdNzoID == nil {
+				continue
+			}
+			if _, taken := out[*d.SABnzbdNzoID]; !taken {
+				out[*d.SABnzbdNzoID] = d
+			}
+		}
+	}
+	return out, nil
+}
+
 func (r *DownloadRepo) ListByStatus(ctx context.Context, status models.DownloadState) ([]models.Download, error) {
 	return r.query(ctx, "SELECT "+downloadSelectColumns+" FROM downloads WHERE status=? ORDER BY added_at DESC", status)
 }
@@ -824,6 +899,87 @@ func (r *DownloadRepo) HasImportInFlight(ctx context.Context, bookID, userID int
 		return false, fmt.Errorf("import in flight for book %d: %w", bookID, err)
 	}
 	return n > 0, nil
+}
+
+// trimTerminalSQL deletes one batch of rows retention may remove. Its two
+// date arguments are the cutoff, then the batch limit follows.
+//
+// A trimmable row is imported or failed and older than the cutoff, where age is
+// imported_at for an import, dead_at for a failure, then the rest of the chain
+// for a row that predates those stamps (the same idea as deadAtSQL).
+// importBlocked is deliberately left out even though nothing polls it: it holds
+// import_path, the only source the Match to book action imports from, and it
+// is waiting for a person. Every non terminal state, importFailed included, is
+// live work.
+//
+// The NOT EXISTS keeps a row while another row that is not itself trimmable
+// names the same client job. The statement is a literal, with no pieces joined
+// in, so nothing from a caller can reach the SQL text.
+const trimTerminalSQL = `
+	DELETE FROM downloads WHERE id IN (
+		SELECT d.id FROM downloads d
+		WHERE d.status IN ('imported','failed')
+		  AND COALESCE(d.imported_at, d.dead_at, d.completed_at, d.grabbed_at, d.added_at) < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM downloads o
+			WHERE o.id <> d.id
+			  AND ((d.torrent_id IS NOT NULL AND d.torrent_id <> '' AND o.torrent_id = d.torrent_id)
+			    OR (d.sabnzbd_nzo_id IS NOT NULL AND d.sabnzbd_nzo_id <> '' AND o.sabnzbd_nzo_id = d.sabnzbd_nzo_id))
+			  AND NOT (o.status IN ('imported','failed')
+			    AND COALESCE(o.imported_at, o.dead_at, o.completed_at, o.grabbed_at, o.added_at) < ?)
+		  )
+		LIMIT ?)`
+
+// TrimTerminal deletes imported and failed download rows that reached that
+// state before cutoff, in batches of batchSize with pause between them, and
+// returns how many it removed. History, the blocklist and every book are left
+// alone: nothing references downloads by foreign key, so a delete cannot
+// cascade.
+//
+// A row is kept while another row that is NOT itself trimmable names the same
+// client job (the same torrent_id or sabnzbd_nzo_id). downloader.OtherDownloadUsingClientJob
+// consults the surviving rows before it removes a torrent or usenet job from a
+// client, and an imported row on a client that keeps imported torrents counts
+// as still seeding there (#3051). Deleting it while a newer row shares the job
+// would let that newer row's removal take the job, and its files, with it. Ids
+// are compared exactly, which is how they are written (torrent ids lower
+// case): the guard's own case folding would defeat the torrent_id index on
+// every candidate row.
+//
+// Each batch is one short DELETE with a LIMIT, so the single connection the
+// pool holds is free between batches for whatever request is waiting for it.
+// ctx cancels between batches.
+//
+// What this changes: downloads.guid is UNIQUE, and an imported row whose book
+// still exists is what makes the grab path refuse that release as already
+// grabbed (models.Download.BlocksRegrab). Once the row is gone the same release
+// can be grabbed again. See docs/DEPLOYMENT.md.
+func (r *DownloadRepo) TrimTerminal(ctx context.Context, cutoff time.Time, batchSize int, pause time.Duration) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	cut := cutoff.UTC()
+	query := trimTerminalSQL
+	var total int64
+	for {
+		res, err := r.db.ExecContext(ctx, query, cut, cut, batchSize)
+		if err != nil {
+			return total, fmt.Errorf("trim terminal downloads: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("trim terminal downloads rows affected: %w", err)
+		}
+		total += n
+		if n < int64(batchSize) {
+			return total, nil
+		}
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		case <-time.After(pause):
+		}
+	}
 }
 
 func (r *DownloadRepo) DeleteByBook(ctx context.Context, bookID int64) error {

@@ -58,6 +58,10 @@ env:
   BINDERY_DB_PATH: /config/bindery.db
   BINDERY_DATA_DIR: /config
   BINDERY_LOG_LEVEL: info
+  # Days to keep a finished (imported or failed) download row before it is
+  # trimmed; 0 keeps every row. History and the blocklist are never trimmed.
+  # See docs/DEPLOYMENT.md for what trimming changes about duplicate grabs.
+  BINDERY_DOWNLOAD_RETENTION_DAYS: "90"
   # IMPORTANT: these defaults are placeholders, NOT a working layout — they are
   # two different paths and neither is backed by a mounted volume out of the
   # box. A dir that isn't inside a mounted volume writes to ephemeral container
