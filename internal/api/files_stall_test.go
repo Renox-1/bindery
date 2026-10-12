@@ -43,6 +43,10 @@ func TestStallDeadlineWriter_RollsTheDeadlineForward(t *testing.T) {
 	if http.NewResponseController(w).Flush() != nil || !d.Flushed {
 		t.Fatal("Flush did not reach the underlying writer")
 	}
+	// A controller built on the wrapper still reaches the server's writer.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil || !d.deadline.IsZero() {
+		t.Fatalf("SetWriteDeadline through the wrapper: err=%v deadline=%v", err, d.deadline)
+	}
 }
 
 // A writer that cannot move its deadline is passed through untouched.
