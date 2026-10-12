@@ -12,7 +12,7 @@ import (
 // SearchAuthorCandidates searches every configured metadata provider for an
 // author name. It is intentionally broader than SearchAuthors, which preserves
 // the primary-provider-only behavior used by normal add/search flows.
-func (a *Aggregator) SearchAuthorCandidates(ctx context.Context, query string) ([]models.Author, error) {
+func (a *aggregatorCore) SearchAuthorCandidates(ctx context.Context, query string) ([]models.Author, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil

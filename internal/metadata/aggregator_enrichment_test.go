@@ -190,7 +190,7 @@ func TestAggregator_EnrichBook_SkipsOnSearchError(t *testing.T) {
 		name:          "hc",
 		searchBookErr: errors.New("hardcover unavailable"),
 	}
-	agg := &Aggregator{
+	agg := &aggregatorCore{requests: &requestCache{},
 		primary:   primary,
 		enrichers: []Provider{enricher},
 		cache:     newTTLCache(time.Minute),
@@ -211,7 +211,7 @@ func TestAggregator_enrichBook_FillsCoverWhenMissing(t *testing.T) {
 		name:        "gb",
 		searchBooks: []models.Book{{Title: "Sapiens", Description: "A description.", ImageURL: "https://books.google.com/cover.jpg"}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	book := &models.Book{Title: "Sapiens", ImageURL: ""}
 	agg.enrichBook(context.Background(), book)
@@ -225,7 +225,7 @@ func TestAggregator_enrichBook_KeepsExistingCover(t *testing.T) {
 		name:        "gb",
 		searchBooks: []models.Book{{Title: "Dune", ImageURL: "https://books.google.com/other.jpg"}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	existing := "https://covers.openlibrary.org/b/id/123-L.jpg"
 	book := &models.Book{Title: "Dune", ImageURL: existing}
@@ -252,7 +252,7 @@ func TestAggregator_enrichBook_AuthorMismatchSkipsEnrichment(t *testing.T) {
 			ImageURL:    "https://example.com/wrong.jpg",
 		}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	book := &models.Book{
 		Title:    "Die Verwandlung",
@@ -279,7 +279,7 @@ func TestAggregator_enrichBook_FillsCoverFromCoverProvider(t *testing.T) {
 		mockProvider: mockProvider{name: "dnb-cover"},
 		urls:         map[string]string{"9783844935776": "https://portal.dnb.de/opac/mvb/cover?isbn=9783844935776"},
 	}
-	agg := &Aggregator{
+	agg := &aggregatorCore{requests: &requestCache{},
 		primary:   primary,
 		enrichers: []Provider{cover},
 		cache:     newTTLCache(time.Minute),
@@ -312,7 +312,7 @@ func TestEnrichBook_CachesAcrossCalls(t *testing.T) {
 			ImageURL: "https://books.google.com/sapiens.jpg",
 		}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	first := &models.Book{
 		ForeignID:        "OLW-123",
@@ -354,7 +354,7 @@ func TestEnrichBook_DifferentBooksGetSeparateCacheEntries(t *testing.T) {
 			"Homo Deus": {{Title: "Homo Deus", ImageURL: "https://books.google.com/homo-deus.jpg"}},
 		},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	a := &models.Book{ForeignID: "OLW-A", MetadataProvider: "openlibrary", Title: "Sapiens"}
 	b := &models.Book{ForeignID: "OLW-B", MetadataProvider: "openlibrary", Title: "Homo Deus"}
@@ -392,7 +392,7 @@ func TestEnrichBook_CacheDoesNotAliasBookPointer(t *testing.T) {
 		name:        "gb",
 		searchBooks: []models.Book{{Title: "Dune", ImageURL: "https://books.google.com/dune.jpg"}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	first := &models.Book{ForeignID: "OLW-DUNE", MetadataProvider: "openlibrary", Title: "Dune"}
 	agg.enrichBook(context.Background(), first)
@@ -424,7 +424,7 @@ func TestAggregator_enrichBook_CoverProviderSkippedWhenAlreadyHaveCover(t *testi
 		mockProvider: mockProvider{name: "dnb-cover"},
 		urls:         map[string]string{"9783844935776": "https://example.com/mvb.jpg"},
 	}
-	agg := &Aggregator{enrichers: []Provider{cover}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{cover}, cache: newTTLCache(time.Minute)}
 	isbn := "9783844935776"
 	existing := "https://existing.example/cover.jpg"
 	book := &models.Book{
@@ -488,7 +488,7 @@ func TestAggregator_enrichBook_PrefersStrongerRatingSignal(t *testing.T) {
 			RatingsCount:  9000,
 		}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	book := &models.Book{
 		Title:         "Dune",
@@ -514,7 +514,7 @@ func TestAggregator_enrichBook_KeepsStrongerExistingRating(t *testing.T) {
 			RatingsCount:  12,
 		}},
 	}
-	agg := &Aggregator{enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	book := &models.Book{
 		Title:         "Dune",
@@ -543,7 +543,7 @@ func TestAggregator_GetBook_NoCover_EnrichedFromProvider(t *testing.T) {
 		name:        "gb",
 		searchBooks: []models.Book{{Title: "21 Lessons for the 21st Century", ImageURL: "https://books.google.com/cover-en.jpg"}},
 	}
-	agg := &Aggregator{primary: primary, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetBook(context.Background(), "OL123W")
 	if err != nil {
@@ -571,7 +571,7 @@ func TestAggregator_GetAuthorWorks_CoversEnrichedForMissingOnes(t *testing.T) {
 			"Homo Deus": {{Title: "Homo Deus", ImageURL: "https://books.google.com/homo-deus.jpg"}},
 		},
 	}
-	agg := &Aggregator{primary: primary, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, enrichers: []Provider{enricher}, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetAuthorWorks(context.Background(), "OL123A")
 	if err != nil {
@@ -598,7 +598,7 @@ func TestAggregator_GetAuthorWorks_NoEnrichersNoCovers(t *testing.T) {
 			authorWorks: []models.Book{{ForeignID: "OL1W", Title: "No Cover Book", ImageURL: ""}},
 		},
 	}
-	agg := &Aggregator{primary: primary, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetAuthorWorks(context.Background(), "OL456A")
 	if err != nil {
@@ -619,7 +619,7 @@ func TestAggregator_enrichBook_CoverProviderSkipsTranslations(t *testing.T) {
 		mockProvider: mockProvider{name: "dnb-cover"},
 		urls:         map[string]string{translation: "https://portal.dnb.de/opac/mvb/cover?isbn=" + translation},
 	}
-	agg := &Aggregator{primary: &mockProvider{name: "nb"}, enrichers: []Provider{cover}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: &mockProvider{name: "nb"}, enrichers: []Provider{cover}, cache: newTTLCache(time.Minute)}
 	book := &models.Book{
 		Title:    "Fjellvinden",
 		Author:   &models.Author{Name: "Kari Nordmann"},
@@ -645,7 +645,7 @@ func TestAggregator_enrichBook_SnapshotKeyedOnLanguage(t *testing.T) {
 		mockProvider: mockProvider{name: "dnb-cover"},
 		urls:         map[string]string{translation: "https://portal.dnb.de/opac/mvb/cover?isbn=" + translation},
 	}
-	agg := &Aggregator{primary: &mockProvider{name: "nb"}, enrichers: []Provider{cover}, cache: newTTLCache(time.Hour)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: &mockProvider{name: "nb"}, enrichers: []Provider{cover}, cache: newTTLCache(time.Hour)}
 	newBook := func(language string) *models.Book {
 		return &models.Book{
 			ForeignID: "NB1W",

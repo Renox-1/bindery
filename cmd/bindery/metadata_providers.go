@@ -1,36 +1,200 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/vavallee/bindery/internal/api"
+	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/metadata/bnf"
+	"github.com/vavallee/bindery/internal/metadata/googlebooks"
 	"github.com/vavallee/bindery/internal/metadata/nb"
 )
 
-// primaryMetadataProvider is the provider wired as primary for name, a value
-// resolveMetadataPrimaryProvider returned. The clients that are also
-// enrichers are passed in so primary and enricher share one instance; NB and
-// BnF are built here because they are never enrichers.
-func primaryMetadataProvider(name string, openLibrary, dnbClient, hardcover metadata.Provider) metadata.Provider {
+// metadataProviders owns every metadata client for the life of the process
+// and turns the current settings into the aggregator's provider set.
+//
+// The clients are built once and reused by every rebuild, never recreated:
+// Hardcover keeps its daily quota and rejected token holds inside the
+// client, OpenLibrary, DNB, NB and Google Books each hold a refusal gate,
+// and BnF's pacer is process wide. A rebuild that made new clients would
+// reset those holds, or let a second client run beside a held one. The cache
+// keys also identify providers by address (metadata.providerSetKey), which
+// is only stable because the instances are.
+//
+// Google Books is the one client whose configuration changes; its key is set
+// live with SetAPIKey rather than by building a new client.
+type metadataProviders struct {
+	settings    *db.SettingsRepo
+	openLibrary metadata.Provider
+	dnb         metadata.Provider
+	hardcover   metadata.Provider
+	nb          metadata.Provider
+	bnf         metadata.Provider
+	googleBooks *googlebooks.Client
+
+	// mu serialises apply. Each apply reads the settings and installs what it
+	// read; without it two saves racing could install the older read last.
+	mu sync.Mutex
+}
+
+func newMetadataProviders(settings *db.SettingsRepo, openLibrary, dnbClient, hardcover metadata.Provider) *metadataProviders {
+	return &metadataProviders{
+		settings:    settings,
+		openLibrary: openLibrary,
+		dnb:         dnbClient,
+		hardcover:   hardcover,
+		// NB and BnF are opt in primaries and never enrichers: an install
+		// that did not choose one sends it no traffic, because neither
+		// publishes rate limits for a fleet of independent installs. Building
+		// the client sends nothing; only wiring it as primary does.
+		nb:          nb.New(),
+		bnf:         bnf.New(),
+		googleBooks: googlebooks.New(""),
+	}
+}
+
+// metadataProviderSet is one resolved configuration: the primary's name (after
+// resolveMetadataPrimaryProvider's fallbacks), the primary, and the enrichers
+// in the order the aggregator asks them.
+type metadataProviderSet struct {
+	primaryName string
+	primary     metadata.Provider
+	enrichers   []metadata.Provider
+	// googleBooksKeyed and hardcoverToken are for the log line only.
+	googleBooksKeyed bool
+	hardcoverToken   bool
+}
+
+// build reads the settings and returns the provider set they select. It is
+// what boot runs and what every reconfiguration runs, so the two cannot
+// drift apart. It also hands the Google Books key to the shared client.
+func (m *metadataProviders) build(ctx context.Context) metadataProviderSet {
+	configuredPrimary := ""
+	if s, _ := m.settings.Get(ctx, api.SettingMetadataPrimaryProvider); s != nil {
+		configuredPrimary = s.Value
+	}
+	hcToken := api.GetHardcoverAPIToken(ctx, m.settings) != ""
+	gbKey := googleBooksAPIKey(ctx, m.settings)
+	m.googleBooks.SetAPIKey(gbKey)
+	set := m.assemble(resolveMetadataPrimaryProvider(configuredPrimary, hcToken), gbKey != "")
+	set.hardcoverToken = hcToken
+	return set
+}
+
+// assemble wires the clients for a resolved primary name. The primary decides
+// what an author's catalogue looks like; every other provider is added as an
+// enricher so metadata is still cross-checked.
+//
+//   - "dnb" is the recommended choice for German/Austrian/Swiss catalogues,
+//     where OpenLibrary coverage is too thin for German-language books.
+//   - "nb" is the same for Norwegian ones: original titles where
+//     OpenLibrary has the English translation.
+//   - "bnf" is the same for French editions, translations included: the
+//     French title an indexer names a release after (#3144).
+//   - "hardcover" trades breadth for a cleaner, editorially curated
+//     catalogue: no translation editions masquerading as separate works, no
+//     omnibus bundles, no non-book merchandise rows (#2040).
+func (m *metadataProviders) assemble(primaryName string, googleBooksKeyed bool) metadataProviderSet {
+	set := metadataProviderSet{
+		primaryName:      primaryName,
+		primary:          m.primaryFor(primaryName),
+		googleBooksKeyed: googleBooksKeyed,
+	}
+	if googleBooksKeyed {
+		set.enrichers = append(set.enrichers, m.googleBooks)
+	}
+	if primaryName != "hardcover" {
+		// The enricher is registered whether or not a token is set: the token
+		// is read live per request through WithTokenSource, so configuring one
+		// later takes effect without a restart (#2075).
+		set.enrichers = append(set.enrichers, m.hardcover)
+	}
+	if primaryName != "openlibrary" {
+		set.enrichers = append(set.enrichers, m.openLibrary)
+	}
+	if primaryName != "dnb" {
+		set.enrichers = append(set.enrichers, m.dnb)
+	}
+	return set
+}
+
+// primaryFor is the provider wired as primary for name, a value
+// resolveMetadataPrimaryProvider returned. Primary and enricher share one
+// instance for the providers that can be either.
+func (m *metadataProviders) primaryFor(name string) metadata.Provider {
 	switch name {
 	case "dnb":
-		return dnbClient
+		return m.dnb
 	case "nb":
-		// Opt-in only: unlike the others, NB is never added as an enricher,
-		// so an install that did not choose it sends NB no traffic. NB
-		// publishes no rate limits for a fleet of independent installs.
-		return nb.New()
+		return m.nb
 	case "bnf":
-		// Opt-in only, like NB: never an enricher, so an install that did not
-		// choose it sends BnF no traffic. BnF publishes no rate limits; the
-		// client paces itself at one request a second (internal/metadata/bnf).
-		return bnf.New()
+		// BnF publishes no rate limits; the client paces itself at one
+		// request a second (internal/metadata/bnf).
+		return m.bnf
 	case "hardcover":
-		return hardcover
+		return m.hardcover
 	default:
-		return openLibrary
+		return m.openLibrary
+	}
+}
+
+// apply rebuilds the provider set from the current settings and installs it
+// on agg. On error the aggregator keeps the set it had.
+func (m *metadataProviders) apply(ctx context.Context, agg *metadata.Aggregator) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.build(ctx)
+	if err := agg.Reconfigure(set.primary, set.enrichers...); err != nil {
+		return err
+	}
+	set.log("metadata providers reconfigured")
+	return nil
+}
+
+// log reports the set in one line, plus the Hardcover note #2075 asked for:
+// the enricher is wired without a token but every call short circuits.
+func (s metadataProviderSet) log(msg string) {
+	names := make([]string, 0, len(s.enrichers))
+	for _, p := range s.enrichers {
+		names = append(names, p.Name())
+	}
+	slog.Info(msg, "primary", s.primaryName, "enrichers", names, "googlebooks_keyed", s.googleBooksKeyed)
+	if s.primaryName != "hardcover" && !s.hardcoverToken {
+		slog.Info("hardcover enrichment idle: no api token configured")
+	}
+}
+
+// metadataProviderSettingKeys are the settings whose change alters the
+// provider set: the primary itself, the Google Books key under both
+// spellings, and the Hardcover token, because a stored hardcover primary
+// with no token falls back to OpenLibrary and comes back when one is saved.
+var metadataProviderSettingKeys = map[string]bool{
+	api.SettingMetadataPrimaryProvider: true,
+	api.SettingGoogleBooksAPIKey:       true,
+	api.LegacySettingGoogleBooksAPIKey: true,
+	api.SettingHardcoverAPIToken:       true,
+}
+
+// metadataProvidersReconfigurer adapts metadataProviders to the settings
+// handler's hook: a save of one of metadataProviderSettingKeys rebuilds the
+// provider set immediately instead of at the next restart (#1771). It
+// reports handled=false for every other key.
+func metadataProvidersReconfigurer(m *metadataProviders, agg *metadata.Aggregator) api.SettingsChangeHook {
+	return func(ctx context.Context, key string) (bool, error) {
+		if !metadataProviderSettingKeys[key] {
+			return false, nil
+		}
+		// The save already succeeded; a rebuild failure leaves the old set
+		// serving and the next restart applies the setting.
+		if err := m.apply(context.WithoutCancel(ctx), agg); err != nil {
+			slog.Warn("metadata providers not reconfigured; the previous providers stay in use until restart",
+				"setting", key, "error", err)
+			return true, err
+		}
+		return true, nil
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/vavallee/bindery/internal/httpsec"
@@ -30,6 +31,10 @@ type Client struct {
 	// gate holds every request this client makes while Google Books is
 	// refusing. Nil (a zero value Client in tests) holds each call on its own.
 	gate *providerhttp.Gate
+	// liveKey, once SetAPIKey has run, replaces apiKey. It lets one client
+	// (and so one refusal gate) live for the whole process while the key
+	// changes under it from Settings (#1771).
+	liveKey atomic.Pointer[string]
 }
 
 // New creates a Google Books client. apiKey can be empty for basic access.
@@ -39,6 +44,25 @@ func New(apiKey string) *Client {
 		apiKey: apiKey,
 		gate:   providerhttp.NewGate(),
 	}
+}
+
+// SetAPIKey changes the key every later request sends. An empty key means
+// basic, unkeyed access. Requests already built keep the key they read.
+func (c *Client) SetAPIKey(apiKey string) {
+	c.liveKey.Store(&apiKey)
+}
+
+// APIKeyConfigured reports whether requests currently carry a key.
+func (c *Client) APIKeyConfigured() bool {
+	return c.key() != ""
+}
+
+// key is the API key for the request being built.
+func (c *Client) key() string {
+	if k := c.liveKey.Load(); k != nil {
+		return *k
+	}
+	return c.apiKey
 }
 
 func (c *Client) Name() string { return "googlebooks" }
@@ -64,8 +88,8 @@ func (c *Client) SearchAuthors(ctx context.Context, query string) ([]models.Auth
 
 func (c *Client) SearchBooks(ctx context.Context, query string) ([]models.Book, error) {
 	u := fmt.Sprintf("%s/volumes?q=%s&maxResults=20", baseURL, url.QueryEscape(query))
-	if c.apiKey != "" {
-		u += "&key=" + url.QueryEscape(c.apiKey)
+	if key := c.key(); key != "" {
+		u += "&key=" + url.QueryEscape(key)
 	}
 
 	var resp volumeSearchResponse
@@ -91,8 +115,8 @@ func (c *Client) GetBook(ctx context.Context, foreignID string) (*models.Book, e
 	// prefix before building the volumes URL or the request 404s.
 	id := strings.TrimPrefix(foreignID, "gb:")
 	u := fmt.Sprintf("%s/volumes/%s", baseURL, id)
-	if c.apiKey != "" {
-		u += "?key=" + url.QueryEscape(c.apiKey)
+	if key := c.key(); key != "" {
+		u += "?key=" + url.QueryEscape(key)
 	}
 
 	var item volumeItem

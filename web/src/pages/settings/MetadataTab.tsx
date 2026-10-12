@@ -117,16 +117,14 @@ export default function MetadataTab() {
               {t('settings.general.metadataProviderBnfCredit', 'Contains data from the Bibliothèque nationale de France (BnF) under the Licence Ouverte / Open Licence 2.0, with the date each record was retrieved shown on its book and author pages. BnF does not endorse Bindery. Only BnF\'s catalogue records are used: no cover images are fetched, and BnF is contacted only while it is the primary provider.')}
             </p>
           )}
-          {/* The generic restartRequired string used to sit here, but it did not
-              say what a user flipping this selector actually needs to know: the
-              provider is resolved once at boot (cmd/bindery/main.go), and even
-              after a restart the catalogue source is chosen per author from
-              their stored foreign ID, so authors already in the library keep
-              their existing provider. Without both halves the predictable
-              outcome is flip → see no change → flip back. #1771 tracks making
-              the aggregator live-reconfigurable, which retires the first half. */}
+          {/* The save rebuilds the metadata providers on the spot (#1771), so
+              there is no restart to mention. What still surprises a user
+              flipping this selector is that the catalogue source is chosen per
+              author from their stored foreign ID: authors already in the
+              library keep their existing provider. Without saying so the
+              predictable outcome is flip, see no change, flip back. */}
           <p className="text-xs text-slate-500 dark:text-zinc-600 mt-1">
-            {t('settings.general.metadataProviderRestartHint', 'Takes effect after the next Bindery restart — the provider is wired at startup, so nothing changes until then. Authors already in your library stay linked to the provider they were added from; the new primary applies to authors you add afterwards. To move an existing author, use "Link metadata" on their page.')}
+            {t('settings.general.metadataProviderLiveHint', 'Takes effect from the next lookup, with no restart. Authors already in your library stay linked to the provider they were added from; the new primary applies to authors you add afterwards. To move an existing author, use "Link metadata" on their page.')}
           </p>
         </div>
 

@@ -619,8 +619,7 @@
       "metadataProviderOpenlibrary": "OpenLibrary (기본값)",
       "metadataProviderDnb": "DNB — Deutsche Nationalbibliothek (독일/DACH)",
       "metadataProviderHardcover": "Hardcover (선별된 카탈로그)",
-      "metadataProviderHardcoverNoToken": "Hardcover — API 토큰 필요 (설정 → API 키)",
-      "metadataProviderRestartHint": "다음 Bindery 재시작 후에 적용됩니다. 제공자는 시작 시점에 연결되므로 그 전에는 아무것도 바뀌지 않습니다. 이미 라이브러리에 있는 저자는 추가될 때 사용된 제공자에 계속 연결되며, 새 기본 제공자는 이후에 추가하는 저자에게 적용됩니다. 기존 저자를 옮기려면 해당 저자 페이지에서 \"메타데이터 연결\"을 사용하세요."
+      "metadataProviderHardcoverNoToken": "Hardcover — API 토큰 필요 (설정 → API 키)"
     },
     "import": {
       "csvHeading": "저자 이름 CSV",

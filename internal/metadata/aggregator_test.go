@@ -514,7 +514,7 @@ func TestAggregator_GetBook_LongDescription(t *testing.T) {
 	// We'll detect if enricher was called by overriding its SearchBooks
 	_ = enricherCalled
 	primary := &mockProvider{name: "ol", getBook: book}
-	agg := &Aggregator{
+	agg := &aggregatorCore{requests: &requestCache{},
 		primary:   primary,
 		enrichers: []Provider{enricher},
 		cache:     newTTLCache(time.Minute),
@@ -541,7 +541,7 @@ func TestAggregator_GetBook_ShortDescription_Enriched(t *testing.T) {
 		name:        "gb",
 		searchBooks: []models.Book{{Title: "Foundation", Description: richerDesc}},
 	}
-	agg := &Aggregator{
+	agg := &aggregatorCore{requests: &requestCache{},
 		primary:   primary,
 		enrichers: []Provider{enricher},
 		cache:     newTTLCache(time.Minute),
@@ -565,7 +565,7 @@ func TestAggregator_GetBook_Enrichment_RatingFilled(t *testing.T) {
 		name:        "hc",
 		searchBooks: []models.Book{{Title: "Short", Description: "Some desc", AverageRating: 4.5, RatingsCount: 100}},
 	}
-	agg := &Aggregator{
+	agg := &aggregatorCore{requests: &requestCache{},
 		primary:   primary,
 		enrichers: []Provider{enricher},
 		cache:     newTTLCache(time.Minute),
@@ -593,7 +593,7 @@ func TestAggregator_GetBook_Enrichment_GenresFromHardcover(t *testing.T) {
 		name:        "hardcover",
 		searchBooks: []models.Book{{Title: "Mistborn", Description: "Some desc", Genres: []string{"Fantasy", "Epic Fantasy"}}},
 	}
-	agg := &Aggregator{primary: primary, enrichers: []Provider{hc}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, enrichers: []Provider{hc}, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetBook(context.Background(), "OL100W")
 	if err != nil {
@@ -616,7 +616,7 @@ func TestAggregator_GetBook_Enrichment_NonHardcoverGenresIgnored(t *testing.T) {
 		name:        "googlebooks",
 		searchBooks: []models.Book{{Title: "Dune", Description: "Some desc", Genres: []string{"Fiction / Science Fiction / General"}}},
 	}
-	agg := &Aggregator{primary: primary, enrichers: []Provider{gb}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, enrichers: []Provider{gb}, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetBook(context.Background(), "OL200W")
 	if err != nil {
@@ -637,7 +637,7 @@ func TestAggregator_GetBook_Enrichment_EmptyHardcoverGenresDoNotBlank(t *testing
 		name:        "hardcover",
 		searchBooks: []models.Book{{Title: "Dune", Description: "Some desc"}}, // no genres
 	}
-	agg := &Aggregator{primary: primary, enrichers: []Provider{hc}, cache: newTTLCache(time.Minute)}
+	agg := &aggregatorCore{requests: &requestCache{}, primary: primary, enrichers: []Provider{hc}, cache: newTTLCache(time.Minute)}
 
 	got, err := agg.GetBook(context.Background(), "OL300W")
 	if err != nil {

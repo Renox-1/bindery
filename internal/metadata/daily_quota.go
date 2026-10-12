@@ -64,7 +64,7 @@ func IsProviderHold(err error) bool { return ProviderHold(err) != nil }
 // CheckQuota lets bulk jobs stop while the primary provider is held. Enrichers
 // are not checked: bulk work does not need them, and their held calls already
 // fail fast without a request. No provider requests are made by this check.
-func (a *Aggregator) CheckQuota(ctx context.Context) error {
+func (a *aggregatorCore) CheckQuota(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}

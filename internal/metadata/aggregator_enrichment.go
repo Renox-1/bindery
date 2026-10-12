@@ -18,7 +18,7 @@ import (
 // EnrichAudiobook fills narrator, duration, and cover from audnex when a
 // book has audiobook audio (MediaType=audiobook or both) and a known ASIN.
 // No-op otherwise.
-func (a *Aggregator) EnrichAudiobook(ctx context.Context, book *models.Book) error {
+func (a *aggregatorCore) EnrichAudiobook(ctx context.Context, book *models.Book) error {
 	if book == nil || book.ASIN == "" {
 		return nil
 	}
@@ -53,7 +53,7 @@ func (a *Aggregator) EnrichAudiobook(ctx context.Context, book *models.Book) err
 // existing primary-provider canonicalizer to find the matching OpenLibrary work.
 // It returns nil when audnex has no usable title/author data or the primary
 // match is ambiguous.
-func (a *Aggregator) GetCanonicalBookByASIN(ctx context.Context, asin string) (*models.Book, error) {
+func (a *aggregatorCore) GetCanonicalBookByASIN(ctx context.Context, asin string) (*models.Book, error) {
 	asin = normalizeASIN(asin)
 	if a == nil || a.primary == nil || asin == "" {
 		return nil, nil
@@ -96,7 +96,7 @@ func (a *Aggregator) GetCanonicalBookByASIN(ctx context.Context, asin string) (*
 	return canonical, nil
 }
 
-func (a *Aggregator) getAudnexBookByASIN(ctx context.Context, asin string) (*audnex.Book, error) {
+func (a *aggregatorCore) getAudnexBookByASIN(ctx context.Context, asin string) (*audnex.Book, error) {
 	asin = normalizeASIN(asin)
 	if a == nil || a.audnex == nil || asin == "" {
 		return nil, nil
@@ -199,7 +199,7 @@ type audibleCatalogue interface {
 // Returns an empty slice when the audible client is unconfigured (test
 // aggregators) rather than nil-derefing. Errors propagate so the caller
 // can log them without failing the broader ingestion.
-func (a *Aggregator) GetAuthorAudiobooks(ctx context.Context, authorName string) ([]models.Book, error) {
+func (a *aggregatorCore) GetAuthorAudiobooks(ctx context.Context, authorName string) ([]models.Book, error) {
 	if a.audible == nil {
 		return nil, nil
 	}
@@ -316,7 +316,7 @@ func enrichmentInputKey(book *models.Book) string {
 // enricher failed, or when the result came from a snapshot built during such a
 // failure. A caller caching the enriched book uses it to keep an incomplete
 // result in the five minute cache rather than the 24 hour one (#2869).
-func (a *Aggregator) enrichBook(ctx context.Context, book *models.Book) bool {
+func (a *aggregatorCore) enrichBook(ctx context.Context, book *models.Book) bool {
 	ctx, scope := a.bindCacheProviders(ctx)
 	cacheKey := enrichBookCacheKey(book)
 	if cacheKey != "" {
@@ -582,7 +582,7 @@ func pickEnrichmentMatch(candidates []models.Book, target *models.Book) *models.
 // A translation's edition is skipped (#3018): its cover is another book's,
 // with another title, and a work's editions often list their translations.
 // The book keeps no cover rather than wearing a translation's.
-func (a *Aggregator) fillCoverFromCoverProviders(ctx context.Context, book *models.Book) {
+func (a *aggregatorCore) fillCoverFromCoverProviders(ctx context.Context, book *models.Book) {
 	for _, p := range a.providers() {
 		p, _ = resolveCacheProvider(ctx, p)
 		cp, ok := p.(CoverProvider)

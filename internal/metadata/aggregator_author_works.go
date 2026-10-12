@@ -39,7 +39,7 @@ type AuthorWorksSnapshot struct {
 // the provider identified by authorForeignID. It exists for explicit catalogue
 // reconciliation: stale cached data or a failed supplemental enricher is not a
 // safe basis for deleting local rows.
-func (a *Aggregator) GetPrimaryAuthorWorksSnapshot(ctx context.Context, authorForeignID string) (AuthorWorksSnapshot, error) {
+func (a *aggregatorCore) GetPrimaryAuthorWorksSnapshot(ctx context.Context, authorForeignID string) (AuthorWorksSnapshot, error) {
 	provider := a.providerForForeignID(authorForeignID)
 	if provider == nil {
 		return AuthorWorksSnapshot{}, errors.New("metadata provider is not available for this author")
@@ -71,7 +71,7 @@ func (a *Aggregator) GetPrimaryAuthorWorksSnapshot(ctx context.Context, authorFo
 // author-works cache. A configured supplement failure makes the snapshot
 // partial; a supplement that is not configured is disabled and therefore does
 // not make the active catalogue indeterminate.
-func (a *Aggregator) GetAuthorWorksSnapshotForAuthor(ctx context.Context, author models.Author) (AuthorWorksSnapshot, error) {
+func (a *aggregatorCore) GetAuthorWorksSnapshotForAuthor(ctx context.Context, author models.Author) (AuthorWorksSnapshot, error) {
 	snapshot, err := a.GetPrimaryAuthorWorksSnapshot(ctx, author.ForeignID)
 	if err != nil {
 		return AuthorWorksSnapshot{}, err
@@ -128,7 +128,7 @@ type authorWorkLanguageEvidenceProvider interface {
 // before. A failed or unconfigured enricher costs only that enricher's
 // evidence: its works fall back to the scalar, edition-sampled and
 // majority-language pipeline unchanged.
-func (a *Aggregator) GetAuthorWorkLanguageEvidence(ctx context.Context, books []models.Book, allowed []string) (map[string]AuthorWorkLanguageEvidence, error) {
+func (a *aggregatorCore) GetAuthorWorkLanguageEvidence(ctx context.Context, books []models.Book, allowed []string) (map[string]AuthorWorkLanguageEvidence, error) {
 	if len(allowed) == 0 {
 		return nil, nil
 	}
@@ -176,7 +176,7 @@ func (a *Aggregator) GetAuthorWorkLanguageEvidence(ctx context.Context, books []
 // language: the edition sampling is bounded but still costs upstream
 // round-trips, which are wasted when allowed_languages is "any" and every book
 // passes the filter regardless of its language (#891).
-func (a *Aggregator) FillMissingAuthorWorkLanguages(ctx context.Context, books []models.Book) int {
+func (a *aggregatorCore) FillMissingAuthorWorkLanguages(ctx context.Context, books []models.Book) int {
 	if filler, ok := a.primary.(workLanguageFiller); ok {
 		return filler.FillMissingWorkLanguages(ctx, books)
 	}
@@ -216,7 +216,7 @@ type authorWorksByIdentityProvider interface {
 // widening to it at the moment the caller has a precise identity would
 // reintroduce exactly the bug this avoids. An identity that finds nothing means
 // the author genuinely has no works there.
-func (a *Aggregator) authorWorksSupplement(ctx context.Context, provider authorWorksByNameProvider, author models.Author, authorName string) ([]models.Book, error) {
+func (a *aggregatorCore) authorWorksSupplement(ctx context.Context, provider authorWorksByNameProvider, author models.Author, authorName string) ([]models.Book, error) {
 	if ip, ok := provider.(authorWorksByIdentityProvider); ok {
 		if id, known := author.ProviderIdentity(provider.Name()); known {
 			slog.Debug("author works supplement by identity",
@@ -231,7 +231,7 @@ func (a *Aggregator) authorWorksSupplement(ctx context.Context, provider authorW
 // provider endpoint. It retains the legacy foreign-ID-only behavior for tests
 // and existing callers; author ingestion should use GetAuthorWorksForAuthor so
 // enrichers can run author-scoped supplemental queries.
-func (a *Aggregator) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
+func (a *aggregatorCore) GetAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
 	ctx, scope := a.bindCacheProviders(ctx)
 	key := "authorworks:" + scope + ":" + authorForeignID
 	ctx, fresh := consumeCacheBypass(ctx)
@@ -267,7 +267,7 @@ func (a *Aggregator) GetAuthorWorks(ctx context.Context, authorForeignID string)
 // An already-enriched catalogue from GetAuthorWorks is returned when cached,
 // since it is a superset of what the caller needs. A refresh that rewrites
 // the raw works drops that entry, so it never shadows fresher raw works.
-func (a *Aggregator) GetAuthorWorksUnenriched(ctx context.Context, authorForeignID string) ([]models.Book, error) {
+func (a *aggregatorCore) GetAuthorWorksUnenriched(ctx context.Context, authorForeignID string) ([]models.Book, error) {
 	ctx, scope := a.bindCacheProviders(ctx)
 	ctx, fresh := consumeCacheBypass(ctx)
 	if !fresh {
@@ -282,7 +282,7 @@ func (a *Aggregator) GetAuthorWorksUnenriched(ctx context.Context, authorForeign
 // GetAuthorWorksForAuthor fetches the primary provider's author works and
 // merges any author-scoped supplemental catalogs from enrichers before falling
 // back to per-title cover enrichment for remaining gaps.
-func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.Author) ([]models.Book, error) {
+func (a *aggregatorCore) GetAuthorWorksForAuthor(ctx context.Context, author models.Author) ([]models.Book, error) {
 	// The identity is part of the key: a relink changes which upstream author
 	// the supplements query without changing ForeignID or Name in every case,
 	// and serving the pre-relink answer would hide the fix (#1734).
@@ -327,7 +327,7 @@ func (a *Aggregator) GetAuthorWorksForAuthor(ctx context.Context, author models.
 	return books, nil
 }
 
-func (a *Aggregator) mergeAuthorWorksSupplements(ctx context.Context, books []models.Book, author models.Author) ([]models.Book, bool, bool) {
+func (a *aggregatorCore) mergeAuthorWorksSupplements(ctx context.Context, books []models.Book, author models.Author) ([]models.Book, bool, bool) {
 	authorName := strings.TrimSpace(author.Name)
 	complete := true
 	cacheable := true
@@ -378,7 +378,7 @@ func (a *Aggregator) mergeAuthorWorksSupplements(ctx context.Context, books []mo
 // through the cache. The ISBN canonicalisation path calls it too, and keeps
 // its cache under a refresh; only the author works entry points switch to
 // refreshPrimaryAuthorWorks, through primaryAuthorWorksFor (#2601).
-func (a *Aggregator) rawPrimaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
+func (a *aggregatorCore) rawPrimaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, error) {
 	provider, scope, key := a.primaryAuthorWorksSource(ctx, authorForeignID)
 	if provider == nil {
 		return nil, nil
@@ -391,7 +391,7 @@ func (a *Aggregator) rawPrimaryAuthorWorks(ctx context.Context, authorForeignID 
 // primaryAuthorWorksFor is rawPrimaryAuthorWorks, or refreshPrimaryAuthorWorks
 // when the caller consumed a cache bypass. intact is false only when the
 // answer must not be cached (see refreshPrimaryAuthorWorks).
-func (a *Aggregator) primaryAuthorWorksFor(ctx context.Context, authorForeignID string, fresh bool) ([]models.Book, bool, error) {
+func (a *aggregatorCore) primaryAuthorWorksFor(ctx context.Context, authorForeignID string, fresh bool) ([]models.Book, bool, error) {
 	if fresh {
 		return a.refreshPrimaryAuthorWorks(ctx, authorForeignID)
 	}
@@ -431,7 +431,7 @@ type authorWorksRefreshProvider interface {
 // (DNB among them) can return an empty list as success when a call failed
 // underneath, and an author losing every work upstream within a day is far
 // less likely than that.
-func (a *Aggregator) refreshPrimaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, bool, error) {
+func (a *aggregatorCore) refreshPrimaryAuthorWorks(ctx context.Context, authorForeignID string) ([]models.Book, bool, error) {
 	provider, scope, key := a.primaryAuthorWorksSource(ctx, authorForeignID)
 	if provider == nil {
 		return nil, true, nil
@@ -476,7 +476,7 @@ func (a *Aggregator) refreshPrimaryAuthorWorks(ctx context.Context, authorForeig
 	return appendNewAuthorWorks(kept, cloneBooks(books)), false, nil
 }
 
-func (a *Aggregator) primaryAuthorWorksForRefresh(ctx context.Context, provider Provider, scope, authorForeignID string) ([]models.Book, bool, error) {
+func (a *aggregatorCore) primaryAuthorWorksForRefresh(ctx context.Context, provider Provider, scope, authorForeignID string) ([]models.Book, bool, error) {
 	if rp, ok := provider.(authorWorksRefreshProvider); ok {
 		return rp.GetAuthorWorksForRefresh(ctx, authorForeignID)
 	}
@@ -506,16 +506,24 @@ func appendNewAuthorWorks(base, fresh []models.Book) []models.Book {
 
 // primaryAuthorWorksSource resolves the provider that owns authorForeignID,
 // bound to the live configuration, and the raw works cache key for it.
-func (a *Aggregator) primaryAuthorWorksSource(ctx context.Context, authorForeignID string) (Provider, string, string) {
+func (a *aggregatorCore) primaryAuthorWorksSource(ctx context.Context, authorForeignID string) (Provider, string, string) {
 	provider := a.providerForForeignID(authorForeignID)
 	if provider == nil {
 		return nil, "", ""
 	}
+	// primaryAuthorWorks answers differently for the same provider depending
+	// on whether it is the primary (a search fallback) or an enricher (nil),
+	// so the role is part of the key: a provider promoted to primary by
+	// Reconfigure must not be served the empty answer it gave as an enricher.
+	role := "enricher"
+	if sameProvider(provider, a.primary) {
+		role = "primary"
+	}
 	provider, scope := resolveCacheProvider(ctx, provider)
-	return provider, scope, "authorworks-raw:" + scope + ":" + authorForeignID
+	return provider, scope, "authorworks-raw:" + role + ":" + scope + ":" + authorForeignID
 }
 
-func (a *Aggregator) primaryAuthorWorks(ctx context.Context, provider Provider, scope, authorForeignID string) ([]models.Book, error) {
+func (a *aggregatorCore) primaryAuthorWorks(ctx context.Context, provider Provider, scope, authorForeignID string) ([]models.Book, error) {
 	if wp, ok := provider.(worksProvider); ok {
 		return wp.GetAuthorWorks(ctx, authorForeignID)
 	}
@@ -525,7 +533,7 @@ func (a *Aggregator) primaryAuthorWorks(ctx context.Context, provider Provider, 
 	return a.searchBoundProviderBooks(ctx, provider, scope, authorForeignID)
 }
 
-func (a *Aggregator) authorWorksByNameProviders(ctx context.Context) []authorWorksByNameProvider {
+func (a *aggregatorCore) authorWorksByNameProviders(ctx context.Context) []authorWorksByNameProvider {
 	if a == nil {
 		return nil
 	}
@@ -846,7 +854,7 @@ func hasFictionSubjectSignal(book models.Book) bool {
 // provider fan-outs (authorAutoSearchConcurrency, authorWorkSampleConcurrency).
 const authorWorkCoverEnrichConcurrency = 4
 
-func (a *Aggregator) enrichMissingAuthorWorkCovers(ctx context.Context, books []models.Book) {
+func (a *aggregatorCore) enrichMissingAuthorWorkCovers(ctx context.Context, books []models.Book) {
 	// enrichBook writes only into the book it is handed and the enricher
 	// clients plus a.cache are goroutine-safe, so bounding the fan-out is a
 	// pure latency win: each index is touched by exactly one goroutine.

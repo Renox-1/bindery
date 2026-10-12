@@ -152,6 +152,38 @@ func TestSearchBooks_WithAPIKey(t *testing.T) {
 	}
 }
 
+// TestSetAPIKeyChangesLaterRequests covers the live key (#1771): a key saved
+// in Settings reaches the next request on the same client, and clearing it
+// goes back to unkeyed access instead of resending the old key.
+func TestSetAPIKeyChangesLaterRequests(t *testing.T) {
+	var gotURL string
+	c := &Client{
+		http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotURL = r.URL.String()
+			return mockResponse(t, http.StatusOK, volumeSearchResponse{}), nil
+		})},
+		apiKey: "bootkey",
+	}
+	for _, tc := range []struct {
+		set     string
+		want    string
+		notWant string
+	}{
+		{set: "newkey", want: "key=newkey", notWant: "bootkey"},
+		{set: "", notWant: "key="},
+		{set: "third", want: "key=third"},
+	} {
+		c.SetAPIKey(tc.set)
+		_, _ = c.SearchBooks(context.Background(), "dune")
+		if tc.want != "" && !strings.Contains(gotURL, tc.want) {
+			t.Errorf("after SetAPIKey(%q): URL %q lacks %q", tc.set, gotURL, tc.want)
+		}
+		if tc.notWant != "" && strings.Contains(gotURL, tc.notWant) {
+			t.Errorf("after SetAPIKey(%q): URL %q still has %q", tc.set, gotURL, tc.notWant)
+		}
+	}
+}
+
 // TestSearchBooks_TransportErrorRedactsAPIKey proves a transport failure does
 // not surface the API key embedded in the request URL. net/http wraps the
 // RoundTripper error in a *url.Error whose Error() includes the full URL, which
