@@ -35,20 +35,85 @@ var downloadArtifactExts = map[string]bool{
 // (case-insensitive). PAR2 volumes like "x.vol01+02.par2" resolve to ".par2"
 // via filepath.Ext, so they are covered without special-casing.
 func isDownloadArtifact(name string) bool {
+	return isReceiptOrRepairFile(name) || isArchivePart(name)
+}
+
+// archiveVolumeRe matches the volumes of a RAR set: "x.rar", which covers the
+// RAR 5 "x.part1.rar" naming, and the RAR 4 overflow volumes "x.r00" to
+// "x.r99", then "x.s00" onwards.
+var archiveVolumeRe = regexp.MustCompile(`(?i)\.(rar|[rs][0-9]{2})$`)
+
+// isArchivePart reports whether name is a volume of a RAR set. Bindery does
+// not unpack archives (#3203): a release packed as one waits for an unpacker
+// such as unpackerr to extract it into the download's folder, and once it has,
+// the volumes are kept out of the library by copy and hardlink placements, like
+// the other download artifacts, and stay with the client. A move of a whole
+// folder carries them along instead (a moved torrent cannot seed anyway), and a
+// per-file move leaves them in the download folder. The name is all it looks
+// at; no archive is opened.
+func isArchivePart(name string) bool {
+	return archiveVolumeRe.MatchString(name)
+}
+
+// archiveAwaitingExtraction reports the first volume of the RAR set under dir
+// when dir holds one and no book file yet: a release packed as an archive
+// that nothing has extracted. Empty when dir holds a book file, no archive,
+// or cannot be read. It stops at the first book file it finds.
+//
+// The first volume is the one an unpacker opens: "x.rar" in the RAR 4 naming,
+// "x.part1.rar" in RAR 5. Both are the first ".rar" in walk order (".part1."
+// sorts before ".part10."); ".r00" sorts before ".rar", so a ".rar" volume
+// wins over an earlier ".rNN" one.
+func archiveAwaitingExtraction(dir string) string {
+	archive, firstRar := "", ""
+	errBookFound := errors.New("book file found")
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return nil
+		}
+		if IsBookFile(path) {
+			return errBookFound
+		}
+		if isArchivePart(d.Name()) {
+			if archive == "" {
+				archive = path
+			}
+			if firstRar == "" && strings.EqualFold(filepath.Ext(d.Name()), ".rar") {
+				firstRar = path
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errBookFound) {
+		return ""
+	}
+	if firstRar != "" {
+		return firstRar
+	}
+	return archive
+}
+
+// isReceiptOrRepairFile reports whether name has one of the receipt or repair
+// extensions in downloadArtifactExts. Unlike isDownloadArtifact it does not
+// count archive volumes: copy and hardlink placements keep those out of the
+// library, but a move takes the folder whole, so a sweep of it must never
+// delete them.
+func isReceiptOrRepairFile(name string) bool {
 	return downloadArtifactExts[strings.ToLower(filepath.Ext(name))]
 }
 
-// removeDownloadArtifacts deletes download-artifact files anywhere under dir.
-// Used after MoveDir's same-filesystem rename fast path, which moves the job
-// folder wholesale (a rename cannot filter); the copy-based paths skip the
-// artifacts at placement time instead. Best-effort: a receipt that cannot be
-// removed is not worth failing an otherwise-successful import over.
+// removeDownloadArtifacts deletes receipt and repair files (not archive
+// volumes, see isReceiptOrRepairFile) anywhere under dir. Used after MoveDir's
+// same-filesystem rename fast path, which moves the job folder wholesale (a
+// rename cannot filter); the copy-based paths skip the receipt and repair files
+// at placement time instead. Archive volumes are never removed. Best-effort: a receipt that cannot be removed is not worth
+// failing an otherwise-successful import over.
 func removeDownloadArtifacts(dir string) {
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if d.Type().IsRegular() && isDownloadArtifact(d.Name()) {
+		if d.Type().IsRegular() && isReceiptOrRepairFile(d.Name()) {
 			if rmErr := os.Remove(path); rmErr != nil {
 				slog.Warn("could not remove download artifact from imported folder", "path", path, "error", rmErr)
 			}
@@ -830,9 +895,10 @@ func moveDir(ctx context.Context, src, dst string, allowRename bool) error {
 	}
 
 	// Fast path: same filesystem. Rename moves the folder wholesale, so any
-	// download artifacts (.nzb receipts, .par2 volumes) ride along — sweep
+	// download artifacts (.nzb receipts, .par2 volumes) ride along, so sweep
 	// them out of the destination afterwards to match the filtering the
-	// copy-based paths do at placement time.
+	// copy-based paths do at placement time. Archive volumes are not swept:
+	// the folder has left the client, so they are all that is left of them.
 	if allowRename {
 		if err := os.Rename(src, dst); err == nil {
 			removeDownloadArtifacts(dst)
@@ -841,7 +907,7 @@ func moveDir(ctx context.Context, src, dst string, allowRename bool) error {
 	}
 
 	// Slow path: recursive copy, then verify, then remove.
-	if err := copyDirContext(ctx, src, dst); err != nil {
+	if err := copyDirFiltered(ctx, src, dst, isReceiptOrRepairFile); err != nil {
 		_ = os.RemoveAll(dst)
 		return fmt.Errorf("copy dir: %w", err)
 	}
@@ -873,7 +939,7 @@ func MoveDirMergeCtx(ctx context.Context, src, dst string) (skipped []string, er
 	if err := checkDestNotInsideSource("move", src, dst); err != nil {
 		return nil, err
 	}
-	skipped, err = mergeCopyDirContext(ctx, src, dst)
+	skipped, err = mergeCopyDirFiltered(ctx, src, dst, isReceiptOrRepairFile)
 	if err != nil {
 		return skipped, fmt.Errorf("copy dir: %w", err)
 	}
@@ -1012,6 +1078,12 @@ func CopyDirMergeCtx(ctx context.Context, src, dst string) (skipped []string, er
 // mergeCopyDirContext is copyDirContext's merge-aware sibling — see
 // CopyDirMergeCtx. dst is created if absent and reused as-is if present.
 func mergeCopyDirContext(ctx context.Context, srcDir, dstDir string) (skipped []string, err error) {
+	return mergeCopyDirFiltered(ctx, srcDir, dstDir, isDownloadArtifact)
+}
+
+// mergeCopyDirFiltered is mergeCopyDirContext with the left-behind set chosen
+// by the caller, as copyDirFiltered is for copyDirContext.
+func mergeCopyDirFiltered(ctx context.Context, srcDir, dstDir string, skip func(string) bool) (skipped []string, err error) {
 	if dirContains(srcDir, dstDir) {
 		return nil, fmt.Errorf("%w: %s is inside %s", ErrDestInsideSource, dstDir, srcDir)
 	}
@@ -1031,7 +1103,7 @@ func mergeCopyDirContext(ctx context.Context, srcDir, dstDir string) (skipped []
 	defer func() { _ = dstRoot.Close() }()
 
 	acc := &mergeSkipTracker{}
-	if err := mergeCopyDirRooted(ctx, srcRoot, dstRoot, ".", acc); err != nil {
+	if err := mergeCopyDirRooted(ctx, srcRoot, dstRoot, ".", acc, skip); err != nil {
 		return acc.skipped, err
 	}
 	return acc.skipped, nil
@@ -1045,7 +1117,7 @@ type mergeSkipTracker struct {
 	skipped []string
 }
 
-func mergeCopyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string, acc *mergeSkipTracker) error {
+func mergeCopyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string, acc *mergeSkipTracker, skip func(string) bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1066,14 +1138,14 @@ func mergeCopyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel stri
 		if !e.Type().IsRegular() && !e.IsDir() {
 			continue // skip symlinks and other non-regular entries
 		}
-		if e.Type().IsRegular() && isDownloadArtifact(e.Name()) {
+		if e.Type().IsRegular() && skip(e.Name()) {
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
 			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
 				return err
 			}
-			if err := mergeCopyDirRooted(ctx, srcRoot, dstRoot, child, acc); err != nil {
+			if err := mergeCopyDirRooted(ctx, srcRoot, dstRoot, child, acc, skip); err != nil {
 				return err
 			}
 			continue
@@ -1276,6 +1348,14 @@ func hardlinkDirRooted(srcRoot, dstRoot *os.Root, rel string) error {
 // what lets callers safely skip os.RemoveAll(src) on cancellation — the copy
 // never finishes, so the seeding source is never deleted.
 func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
+	return copyDirFiltered(ctx, srcDir, dstDir, isDownloadArtifact)
+}
+
+// copyDirFiltered is copyDirContext with the set of files left behind chosen
+// by the caller. Copy mode passes isDownloadArtifact, which keeps archive
+// volumes out of the library. A move passes isReceiptOrRepairFile: the move
+// deletes the source afterwards, so leaving a volume behind would destroy it.
+func copyDirFiltered(ctx context.Context, srcDir, dstDir string, skip func(string) bool) error {
 	// A destination nested inside the source is unwalkable: the recursion below
 	// would descend into the directory tree it is creating and copy forever
 	// (#1809). Refuse before anything is created.
@@ -1297,10 +1377,10 @@ func copyDirContext(ctx context.Context, srcDir, dstDir string) error {
 	}
 	defer func() { _ = dstRoot.Close() }()
 
-	return copyDirRooted(ctx, srcRoot, dstRoot, ".")
+	return copyDirRooted(ctx, srcRoot, dstRoot, ".", skip)
 }
 
-func copyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string) error {
+func copyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string, skip func(string) bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1321,14 +1401,14 @@ func copyDirRooted(ctx context.Context, srcRoot, dstRoot *os.Root, rel string) e
 		if !e.Type().IsRegular() && !e.IsDir() {
 			continue // skip symlinks and other non-regular entries
 		}
-		if e.Type().IsRegular() && isDownloadArtifact(e.Name()) {
+		if e.Type().IsRegular() && skip(e.Name()) {
 			continue // receipts/repair files never enter the library (#1542)
 		}
 		if e.IsDir() {
 			if err := dstRoot.Mkdir(child, 0o750); err != nil && !os.IsExist(err) {
 				return err
 			}
-			if err := copyDirRooted(ctx, srcRoot, dstRoot, child); err != nil {
+			if err := copyDirRooted(ctx, srcRoot, dstRoot, child, skip); err != nil {
 				return err
 			}
 			continue
