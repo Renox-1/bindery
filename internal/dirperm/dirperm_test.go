@@ -13,10 +13,10 @@ func TestParse(t *testing.T) {
 		{"whitelisted with leading zero", "0755", 0o755},
 		{"whitelisted without leading zero", "755", 0o755},
 		{"historical default", "0750", 0o750},
-		{"group writable", "0770", 0o770},
-		{"world readable", "0775", 0o775},
+		{"group-write mode stripped by umask falls back", "0770", 0o750},
+		{"world-readable group-write falls back", "0775", 0o750},
 		{"owner-only stays valid", "0700", 0o700},
-		{"open mode accepted", "0777", 0o777},
+		{"open mode stripped by umask falls back", "0777", 0o750},
 		{"unlisted octal falls back", "0774", 0o750},
 		{"invalid text falls back", "abc", 0o750},
 		{"decimal digits fall back", "099", 0o750},
@@ -42,8 +42,9 @@ func TestLibrary(t *testing.T) {
 		mode  uint32
 	}{
 		{"unset falls back to default", "", 0o750},
-		{"whitelisted mode honoured", "0775", 0o775},
-		{"whitelisted mode without leading zero", "755", 0o755},
+		{"whitelisted mode honoured", "0755", 0o755},
+		{"whitelisted mode without leading zero", "750", 0o750},
+		{"group-write mode stripped by umask falls back", "0775", 0o750},
 		{"unrecognised value falls back", "0o755", 0o750},
 	}
 

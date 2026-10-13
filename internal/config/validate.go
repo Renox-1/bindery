@@ -115,12 +115,12 @@ func (c *Config) Validate(logger *slog.Logger) error {
 
 	// BINDERY_DIR_MODE is silently ignored when unrecognised: dirperm falls
 	// back to the 0750 default at runtime. Warn so an operator who typed
-	// "0o755" (Go spelling) or a decimal value learns why the mode did not
-	// change.
+	// "0o755" (the Go spelling) or a decimal value learns why the mode did
+	// not change.
 	if raw := os.Getenv("BINDERY_DIR_MODE"); strings.TrimSpace(raw) != "" && !dirperm.Valid(raw) {
-		logger.Warn("config: BINDERY_DIR_MODE has an unrecognised value — importer-created library directories keep the 0750 default",
+		logger.Warn("config: BINDERY_DIR_MODE has an unrecognised value, importer-created library directories keep the 0750 default",
 			"provided", raw,
-			"accepted", "0700, 0750, 0755, 0770, 0775, 0777 (leading zero optional)")
+			"accepted", "0700, 0750, 0755 (leading zero optional)")
 	}
 
 	return nil

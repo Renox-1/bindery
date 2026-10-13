@@ -305,6 +305,7 @@ func TestValidate_DirMode(t *testing.T) {
 		{"valid mode", "0755", false},
 		{"valid mode without leading zero", "755", false},
 		{"go-style 0o prefix", "0o755", true},
+		{"group-write mode dropped in the umask trim", "0775", true},
 		{"unlisted octal", "0774", true},
 		{"junk", "banana", true},
 	}
